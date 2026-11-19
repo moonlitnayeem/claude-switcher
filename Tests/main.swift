@@ -6138,6 +6138,16 @@ do {
     check(pool.accounts.count == 1 && pool.accounts.first?.id == "account:a" && pool.accounts.first?.sealed == "second",
           "one account signed in twice is one entry, holding the newer login")
     check(pool.lenders(of: main) == ["account:a"], "and is lent once")
+    pool.learnAccounts([main: "A", "other": "unique", "other-alias": "UNIQUE"])
+    pool.addLender("other", to: main)
+    pool.addLender("other-alias", to: main)
+    check(pool.members(of: main) == [main, "other"] && pool.sameIdentity("account:a", main),
+          "the dashboard counts each login once and recognizes the main login when a request uses its other handle")
+    pool.removeDisplayedBackup("account:a", from: main)
+    pool.removeDisplayedBackup("other", from: main)
+    check(pool.lenders(of: main) == ["account:a"] && pool.accounts.count == 1,
+          "removing a displayed backup unlinks its aliases while preserving the main login and stored accounts")
+    pool.learnAccounts([:])
     let oldSettings = Data(#"{"lenders":{"main":["account:a"]},"assignments":{}}"#.utf8)
     check((try? JSONDecoder().decode(UsageSharing.self, from: oldSettings))?.routingLenders(for: main) == ["account:a"],
           "settings from before the switch keep their configured backups")

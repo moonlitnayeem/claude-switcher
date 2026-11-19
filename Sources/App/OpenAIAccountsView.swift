@@ -124,13 +124,13 @@ struct OpenAIAccountsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(copy("Codex Desktop"), systemImage: "macwindow").font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            Text(copy("Desktop uses the account signed in there. Choose Codex or ChatGPT from the menu at the top left."))
+            Text(copy("Open the desktop app to return to your work. Choose a folder only to start a new Codex chat with local files."))
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) { desktopButtons }
                 VStack(alignment: .leading, spacing: 10) { desktopButtons }
             }
-            Text(copy("To use another account, sign out in the desktop app and sign in with that account. Opening a project starts a new Codex chat with its local files.")).font(.callout)
+            Text(copy("To change accounts, sign out in the desktop app and sign in with your other account.")).font(.callout)
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if OpenAIDesktop.installedURL() == nil {
                 Link(copy("Get the desktop app"), destination: OpenAIDesktop.downloadURL).identified("openai.install-desktop")
@@ -145,7 +145,7 @@ struct OpenAIAccountsView: View {
         Button(copy("Open desktop app")) {
             launch(message: copy("Opened the desktop app.")) { try await OpenAIDesktop.open() }
         }.buttonStyle(.borderedProminent).tint(accent).identified("openai.desktop").disabled(opening)
-        Button(copy("Open project…")) {
+        Button(copy("New chat in folder…")) {
             guard OpenAIDesktop.installedURL() != nil else {
                 errorText = OpenAILaunchError.desktopMissing.localizedDescription
                 return
@@ -153,13 +153,13 @@ struct OpenAIAccountsView: View {
             if let folder = chooseFolder() { openDesktopProject(folder) }
         }.identified("openai.desktop-project").disabled(opening)
         if !lastDesktopProject.isEmpty {
-            Button(copy("Reopen project")) { openDesktopProject(URL(fileURLWithPath: lastDesktopProject, isDirectory: true)) }
+            Button(copy("New chat in last folder")) { openDesktopProject(URL(fileURLWithPath: lastDesktopProject, isDirectory: true)) }
                 .buttonStyle(.link).identified("openai.desktop-reopen").help(lastDesktopProject).disabled(opening)
         }
     }
 
     private func openDesktopProject(_ folder: URL) {
-        launch(message: copy("Opened your project in Codex Desktop.")) {
+        launch(message: copy("Opened a new Codex chat for your folder.")) {
             try await OpenAIDesktop.open(project: folder)
             lastDesktopProject = folder.path
         }
@@ -297,7 +297,7 @@ struct OpenAIAccountsView: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.message = copy("Choose the project you want to work on.")
-        panel.prompt = copy("Open project")
+        panel.prompt = copy("Choose folder")
         return panel.runModal() == .OK ? panel.url : nil
     }
 

@@ -1,8 +1,16 @@
 # AI Switcher
 
-AI Switcher shows which account answered a Claude Code request in Claude Desktop. When your main account reaches a limit, an eligible request can move to a backup while you keep the same chat and model. You can also open the OpenAI desktop app or start a new desktop Codex task in a local project.
+AI Switcher shows which account answered a Claude Code request in Claude Desktop. You can also open ChatGPT or start a new Codex task in the OpenAI desktop app using a folder on your Mac.
 
 [Download for macOS](https://github.com/moonlitnayeem/claude-switcher/releases/latest) · [All releases](https://github.com/moonlitnayeem/claude-switcher/releases) · [Report a problem](https://github.com/moonlitnayeem/claude-switcher/issues)
+
+## Do I need Graft?
+
+**If your Claude Desktop account list shows “Manage in Graft”, keep Graft installed and running.** Graft switches eligible requests to a backup when your main account hits a limit. AI Switcher shows which account answered. Installing AI Switcher or turning off **Use my existing Graft setup** does not move that connection.
+
+AI Switcher opens on its own and includes a local relay for separately configured Claude Desktop profiles. For a personal subscription, Anthropic supports signing in directly to Claude Code. Its rules prohibit third-party products from routing users’ requests through their personal subscription credentials. The bundled relay does not provide a supported way to move an existing subscription chat off Graft. [Anthropic’s authentication and credential rules](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use)
+
+The ChatGPT and Codex desktop actions and the optional browser and Terminal profiles work without Graft. To switch accounts in the OpenAI desktop app, use that app’s account controls.
 
 ![AI Switcher’s account map showing a sample Fable 5.2 request trying the backup. Both account names are fictional.](docs/images/switcher-routing.png)
 
@@ -13,18 +21,16 @@ Open the DMG, drag **AI Switcher** to **Applications**, then open it. The app su
 ## Use Claude Code in Claude Desktop with Graft
 
 1. Keep Graft running. In **AI Switcher → Settings**, turn on **Use my existing Graft setup**. This option appears when Switcher finds Graft’s saved setup.
-2. Quit and reopen **AI Switcher**. Open **Claude Desktop** in its sidebar. You’ll see your main account, its backups and the last account that answered. Graft keeps its sign-ins and its existing connection to Claude. This setup requires no changes in Claude.
+2. Quit and reopen **AI Switcher**. Open **Claude Desktop** in its sidebar. Your main account comes first. If Graft also lists that sign-in as a backup, AI Switcher shows it once, under **Main**. The other accounts appear under **Backup**. Graft keeps its sign-ins and its existing connection to Claude.
 3. Choose **Rename label** beside an account, type a nickname such as “Work”, then choose **Save label**. Leave the label empty to use the original name again. The nickname is saved on this Mac. To add a backup, remove one or change which account a chat uses, choose **Manage in Graft**.
 
 On the main profile, choose **Open Claude Desktop** to continue in the installed app. In this setup, Graft handles each eligible Claude Code request sent through its existing connection. AI Switcher reads its status about once a second while the map is open. You can keep working in the same Claude window with the connection Graft already installed.
 
 The globe slowly turns while the map is visible. A pulse along a line means Graft reported a recent reply. **Recent activity** names the account and model that answered. If a chat has a saved backup choice, that backup can answer even before the main account reaches a limit. Turn on macOS **Reduce Motion** to hold the globe still and read the same account status in text.
 
-## Connect a separate Claude Desktop profile directly
+## Profiles managed by AI Switcher
 
-For a Claude Desktop profile with no existing router, open **Claude Desktop** in the sidebar. Under **Your accounts**, use **Add backup** to select another signed-in profile or sign in to a backup. Turn on **Automatic switching**. Allow Keychain access if prompted. If Switcher asks you to reopen the Claude profile, finish your work and reopen it once to connect it to Switcher’s local relay.
-
-Use **Rename label** to give an account a nickname. **Remove backup** takes an account out of this profile’s list and keeps its sign-in for later. To delete an unused sign-in from AI Switcher, choose **Add backup → Forget a saved sign-in…** and confirm. During a request, the **Account map** lights up the path to the account Switcher is trying. If the main account reaches its limit, the map can move to the backup. **Recent activity** records which account answered and shows a later error separately. Turn **Automatic switching** off to use only the profile’s own account for new requests. Your backup list is saved.
+For a profile already connected directly to AI Switcher, the **Account map** and **Recent activity** show what Switcher’s bundled relay handled. **Rename label** gives an account a nickname on this Mac. **Remove backup** takes the account out of that profile’s list and keeps its saved sign-in. **Forget a saved sign-in…** removes an unused sign-in after confirmation. Turning off **Automatic switching** keeps the saved backup list.
 
 ### Use Claude Code in Terminal
 
@@ -38,9 +44,9 @@ An eligible request can move to another account you’ve connected. Requests tie
 
 ## Use the OpenAI desktop app
 
-Open **ChatGPT & Codex** in the sidebar. **Open desktop app** brings the installed OpenAI app forward with its own signed-in account. If that account hits a usage limit, account switching is manual. Use the desktop app’s own account controls.
+Open **ChatGPT & Codex** in the sidebar. **Open desktop app** brings the OpenAI app forward so you can continue in your existing window without choosing a folder. Choose Codex or ChatGPT from the menu at the top left. The app uses its own signed-in account. If that account hits a usage limit, account switching is manual. [OpenAI desktop guide](https://learn.chatgpt.com/docs/app)
 
-Choose **Open project…** and select a folder on your Mac. Codex opens a fresh desktop composer for that folder and waits for your message. **Reopen project** brings you back to that folder for a new task. The files stay on disk, and existing chats and running tasks stay with the account that started them. The account choices in AI Switcher’s **Browser and Terminal profiles** section apply to those optional tools.
+When you want to start a new task with files on your Mac, choose **New chat in folder…**. **New chat in last folder** starts another chat in the folder you picked last time. Files stay on disk, and existing chats and running tasks stay with the account that started them. Account choices under **Browser and Terminal profiles** apply to those optional tools.
 
 ![AI Switcher showing the OpenAI desktop launch and project actions.](docs/images/switcher-openai.png)
 

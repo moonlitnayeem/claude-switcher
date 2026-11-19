@@ -699,3 +699,4 @@
 "macOS Terminal could not be found." = "Не удалось найти приложение Терминал для macOS.";
 
 "More" = "Ещё";
+"Claude Code uses Graft for this connection" = "Claude Code использует Graft для этого подключения";

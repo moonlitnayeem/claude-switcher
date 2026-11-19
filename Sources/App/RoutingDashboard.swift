@@ -48,7 +48,7 @@ struct RoutingDashboard: View {
             get: { pool.automaticSwitchingEnabled(for: key) },
             set: { pool.setAutomaticSwitching($0, for: key) }
         ), canSwitch: UsagePoolController.isSupported, recheck: pool.recheckFable,
-                     removeBackup: { pool.removeLender($0, from: key) },
+                     removeBackup: { pool.removeDisplayedBackup($0, from: key) },
                      renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) },
                      launchControls: key == UsagePoolController.mainKey ? ClaudeLaunchControls() : nil) {
             if profiles.count > 1 {
@@ -78,34 +78,30 @@ struct RoutingDashboard: View {
     }
 
     private func name(_ key: String) -> String {
-        if let uuid = pool.accountUuid(of: key),
-           let email = pool.accounts.first(where: { $0.accountUuid == uuid })?.email {
+        if let email = pool.accounts.first(where: { pool.sameIdentity(key, $0.id) })?.email {
             return email
         }
         return pool.name(of: key)
     }
 
     private func display(for key: String) -> RoutingDisplay {
-        let lenders = pool.lenders(of: key)
-        var identities = Set<String>()
-        let rows = ([key] + lenders).map { id -> RoutingAccountDisplay in
-            let unique = identities.insert(pool.accountUuid(of: id) ?? id).inserted
-            return account(id, primary: key, distinct: unique)
-        }
+        let available = pool.members(of: key)
+        let ids = available.isEmpty ? [key] : available
+        let rows = ids.map { account($0, primary: key) }
         let history = (pool.status?.recent ?? []).filter { $0.from == key }
         let last = history.last { (200..<300).contains($0.status) }
-        let summary = readiness(for: key, lenders: lenders, rows: rows)
+        let summary = readiness(for: key, rows: rows)
         var result = RoutingDisplay(title: L10n.text(summary.0), detail: L10n.text(summary.1), ready: summary.2,
                                     accounts: rows, lastAccount: last.map { name($0.servedBy) },
                                     lastModel: last?.model.map(Self.modelName), lastAnswered: last?.at)
         if let live = pool.status?.activeRoutes?.filter({ $0.from == key }).max(by: { $0.startedAt < $1.startedAt }) {
-            result.route = RouteMapSignal(phase: .sending, backup: live.member != key,
+            result.route = RouteMapSignal(phase: .sending, backup: !pool.sameIdentity(live.member, key),
                                           model: live.model.map(Self.modelName), at: live.startedAt,
                                           mainLimited: !PoolPolicy.hasRoom(pool.status?.members.first { $0.id == key }?.limits,
                                                                            now: Date(), model: live.model))
         } else if let recent = history.last {
             result.route = RouteMapSignal(phase: (200..<300).contains(recent.status) ? .answered : .failed,
-                                          backup: recent.servedBy != key, model: recent.model.map(Self.modelName), at: recent.at)
+                                          backup: !pool.sameIdentity(recent.servedBy, key), model: recent.model.map(Self.modelName), at: recent.at)
         }
         if let failed = history.last, !(200..<300).contains(failed.status) {
             let model = failed.model.map(Self.modelName) ?? "Claude Code"
@@ -116,14 +112,14 @@ struct RoutingDashboard: View {
         return result
     }
 
-    private func readiness(for key: String, lenders: [String], rows: [RoutingAccountDisplay]) -> (String, String, Bool) {
+    private func readiness(for key: String, rows: [RoutingAccountDisplay]) -> (String, String, Bool) {
         guard UsagePoolController.isSupported else {
             return ("Unavailable on this Mac", "Automatic switching requires macOS 15 or later.", false)
         }
         guard pool.automaticSwitchingEnabled(for: key) else {
             return ("Switching is off", "Turn it on to use backup accounts for Claude Code requests.", false)
         }
-        guard !lenders.isEmpty else {
+        guard rows.count > 1 else {
             return ("Add a backup account", "Add another account so Claude has somewhere to go when your main account runs out.", false)
         }
         if pool.lendingPaused {
@@ -154,7 +150,7 @@ struct RoutingDashboard: View {
         }
     }
 
-    private func account(_ id: String, primary: String, distinct: Bool) -> RoutingAccountDisplay {
+    private func account(_ id: String, primary: String) -> RoutingAccountDisplay {
         let report = pool.status?.members.first { $0.id == id }
         let limits = report?.limits
         let live = pool.profile(of: id).flatMap(usage.entry(for:))?.currentUsage
@@ -165,10 +161,7 @@ struct RoutingDashboard: View {
         }
         var row = RoutingAccountDisplay(id: id, name: name(id), isPrimary: id == primary,
                                          state: "Checking login", weeklyUsed: week)
-        if !distinct {
-            row.state = "Already listed"
-            row.needsAttention = true
-        } else if report?.tokenRefused == true || pool.lending[id] == .expired {
+        if report?.tokenRefused == true || pool.lending[id] == .expired {
             row.state = "Sign in again"
             row.needsAttention = true
         } else if pool.lending[id] == .signedOut {
@@ -189,7 +182,7 @@ struct RoutingDashboard: View {
             row.fableReset = until
             // The primary uses its original request bearer. Only a backup needs a lendable login.
             let eligibleLogin = row.isPrimary || (pool.lending[id] == .ready && report?.tokenRefused != true)
-            row.canRecheck = distinct && eligibleLogin && PoolPolicy.hasRoom(limits, now: Date())
+            row.canRecheck = eligibleLogin && PoolPolicy.hasRoom(limits, now: Date())
                 && pool.automaticSwitchingEnabled(for: primary)
             row.recheckPending = report?.fableRecheckPending == true || pool.sendingFableRechecks.contains(id)
         }
@@ -262,14 +255,16 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                             Spacer(minLength: 8)
                             profile()
                         }
+                        let subtitle: LocalizedStringKey = data.externallyManaged
+                            ? "Claude Code uses Graft for this connection" : "Claude Code account map"
                         ViewThatFits(in: .horizontal) {
                             HStack {
-                                Text("Claude Code account map").font(.callout).foregroundStyle(.secondary)
+                                Text(subtitle).font(.callout).foregroundStyle(.secondary)
                                 Spacer(minLength: 12)
                                 launchControls
                             }
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Claude Code account map").font(.callout).foregroundStyle(.secondary)
+                                Text(subtitle).font(.callout).foregroundStyle(.secondary)
                                 launchControls
                             }
                         }

@@ -12,9 +12,9 @@ Claude keeps using its saved connection.
 
 New to AI Switcher?
 Choose “Open Claude Desktop” on the main profile to return to Claude.
-Under ChatGPT & Codex, choose “Open desktop app” or “Open project…” to
-begin a Codex desktop task in a local folder. The desktop app uses its
-own sign-in.
+Under ChatGPT & Codex, choose “Open desktop app” to return to your work.
+Choose “New chat in folder…” only when you want a new Codex chat with
+local files. Switch accounts in the desktop app using its own sign-in.
 
 For Claude Code in Terminal, choose “More” beside “Open Claude Desktop”
 on the main profile. The CLI uses its own usual sign-in.

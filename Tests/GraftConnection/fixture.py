@@ -8,12 +8,19 @@ import time
 root = Path(sys.argv[1])
 pool = root / 'pool'
 pool.mkdir()
+primary_uid = 'f731d554-6d0f-4a78-817e-b9bf2ae16f18'
+backup_uid = '07e2ee11-8daf-4aa5-a70a-42c5be94aa45'
+profiles = root / 'profiles'
+for folder, uid in [('Claude', primary_uid), ('Claude-Studio', backup_uid)]:
+    (profiles / folder).mkdir(parents=True)
+    (profiles / folder / 'config.json').write_text(json.dumps({'lastKnownAccountUuid': uid.upper()}))
 profile = '28DD0EAC-AED5-4C8F-BC67-5EC94716B961'
-(root / 'shortcuts.json').write_text(json.dumps([{'id': profile, 'name': 'Studio'}]))
-(root / 'usage-sharing.json').write_text(json.dumps({'lenders': {'main': ['backup'], profile: []}}))
+(root / 'shortcuts.json').write_text(json.dumps([{'id': profile, 'name': 'Studio', 'folder': 'Claude-Studio'}]))
+(root / 'usage-sharing.json').write_text(json.dumps({'lenders': {'main': ['backup', 'main-alias', profile], profile: ['backup']}}))
 # Junk in the opaque fields proves the reader never tries to decode them.
 (pool / 'accounts.json').write_text(json.dumps([
-    {'id': 'backup', 'email': 'second@example.org', 'sealed': {'invalid': True}},
+    {'id': 'backup', 'email': 'second@example.org', 'accountUuid': backup_uid, 'sealed': {'invalid': True}},
+    {'id': 'main-alias', 'email': 'first@example.org', 'accountUuid': primary_uid},
     {'id': 'unused', 'email': 'unused@example.net', 'sealed': [True]}]))
 now = time.time() - 978307200
 limits = {'fiveHour': 0.1, 'week': 0.3, 'weekReset': now + 3600, 'observed': now, 'fableRefusedUntil': now + 1800}

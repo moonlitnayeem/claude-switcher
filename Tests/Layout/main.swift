@@ -506,7 +506,7 @@ for page in pages {
                     }
                 }
                 if page.selection == ContentView.openAIID {
-                    for (control, title) in [("desktop", "Open desktop app"), ("desktop-project", "Open project…")] {
+                    for (control, title) in [("desktop", "Open desktop app"), ("desktop-project", "New chat in folder…")] {
                         let action = element("window.openai.\(control)", in: tree)
                         check(action?.role == kAXButtonRole && action?.name == OpenAICopy.text(title),
                               "\(place): the desktop action \(control) is visible")
@@ -725,8 +725,8 @@ do {
         check(element("window.openai.\(control)", in: tree) != nil,
               "compact OpenAI profiles expose their \(control) control")
     }
-    check(element("window.openai.desktop-reopen", in: tree)?.name == OpenAICopy.text("Reopen project"),
-          "a saved desktop project can be reopened without selecting a Terminal profile")
+    check(element("window.openai.desktop-reopen", in: tree)?.name == OpenAICopy.text("New chat in last folder"),
+          "a new desktop chat can use the last folder without selecting a Terminal profile")
     check(element("window.openai.same-folder", in: tree)?.name == OpenAICopy.text("Use same folder"),
           "a different account can open the same local project in a new session")
     check(tree.contains { [$0.name, $0.value].contains("Team account 9") },

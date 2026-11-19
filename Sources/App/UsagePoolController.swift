@@ -378,9 +378,18 @@ final class UsagePoolController: ObservableObject {
 
     /// Unlinking this profile keeps its backup available for someone to choose again later.
     func removeLender(_ lender: String, from claude: String) {
-        guard lenders(of: claude).contains(lender) else { return }
+        removeLenders([lender], from: claude)
+    }
+
+    func removeDisplayedBackup(_ lender: String, from claude: String) {
+        guard !sameIdentity(lender, claude) else { return }
+        removeLenders(Set(lenders(of: claude).filter { sameIdentity($0, lender) }), from: claude)
+    }
+
+    private func removeLenders(_ keys: Set<String>, from claude: String) {
+        guard !keys.isDisjoint(with: lenders(of: claude)) else { return }
         var next = sharing
-        next.lenders[claude]?.removeAll { $0 == lender }
+        next.lenders[claude]?.removeAll { keys.contains($0) }
         if next.lenders[claude]?.isEmpty == true { next.lenders[claude] = nil }
         save(next)
     }
@@ -547,6 +556,12 @@ final class UsagePoolController: ObservableObject {
         return claudeAccounts[key]
     }
 
+    func sameIdentity(_ first: String, _ second: String) -> Bool {
+        if first == second { return true }
+        guard let a = accountUuid(of: first), let b = accountUuid(of: second) else { return false }
+        return a.caseInsensitiveCompare(b) == .orderedSame
+    }
+
     /// Off the main thread: every one of these is a file read.
     static func readAccounts(_ claudes: [(String, URL)]) -> [String: String] {
         var found: [String: String] = [:]
@@ -633,7 +648,7 @@ final class UsagePoolController: ObservableObject {
         var out: [String] = []
         var place: [String: Int] = [:]
         for key in keys {
-            let account = accountUuid(of: key) ?? key
+            let account = accountUuid(of: key).map { "account:" + $0.lowercased() } ?? "handle:" + key
             if let index = place[account] {
                 if index > 0, !canLend(out[index]), canLend(key) { out[index] = key }
             } else {

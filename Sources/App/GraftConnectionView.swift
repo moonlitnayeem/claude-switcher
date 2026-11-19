@@ -15,7 +15,7 @@ struct GraftConnectionView: View {
     var body: some View {
         let key = snapshot.profiles.contains(profile) ? profile : "main"
         let status = snapshot.status
-        let enabled = status?.configured == true && status?.enabled == true && !(snapshot.lenders[key] ?? []).isEmpty
+        let enabled = status?.configured == true && status?.enabled == true && snapshot.accounts(for: key).members.count > 1
         RoutingPanel(data: display(profile: key), enabled: .constant(enabled), canSwitch: false,
                      recheck: { member in recheck(member, profile: key) },
                      renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) },
@@ -55,20 +55,21 @@ struct GraftConnectionView: View {
     }
 
     private func accountName(_ id: String, profile: String) -> String {
-        if snapshot.lenders[profile]?.contains(id) == true, let email = snapshot.accountLabels[id] { return email }
+        if let email = snapshot.email(for: id, from: profile) { return email }
         if let name = snapshot.names[id] { return name }
         if id == profile || id == "main" { return profileName(id) }
-        if let index = snapshot.lenders[profile]?.firstIndex(of: id) {
-            return L10n.format("Backup %ld", index + 1)
+        if let index = snapshot.accounts(for: profile).members.firstIndex(of: id) {
+            return L10n.format("Backup %ld", index)
         }
         return L10n.text("Previously connected account")
     }
 
     private func display(profile: String) -> RoutingDisplay {
-        let backupIDs = (snapshot.lenders[profile] ?? []).filter { $0 != profile }
+        let accounts = snapshot.accounts(for: profile)
+        let backupIDs = accounts.members.dropFirst()
         let status = snapshot.status
         let now = Date()
-        let rows = ([profile] + backupIDs).map { id -> RoutingAccountDisplay in
+        let rows = accounts.members.map { id -> RoutingAccountDisplay in
             let report = status?.members.first { $0.id == id }
             let limits = report?.limits
             let weekIsCurrent = limits.map { ($0.weekReset ?? .distantFuture) > now } ?? false
@@ -106,8 +107,8 @@ struct GraftConnectionView: View {
             title = "Switching is off"
             detail = "Use Manage in Graft to choose the accounts for this profile."
         } else if let last = history.last, (200..<300).contains(last.status),
-                  backupIDs.contains(last.servedBy), let session = last.session,
-                  snapshot.chatChoices[session] == last.servedBy {
+                  backupIDs.contains(accounts.canonical(last.servedBy)), let session = last.session,
+                  let choice = snapshot.chatChoices[session], accounts.canonical(choice) == accounts.canonical(last.servedBy) {
             title = "Your backup answered"
             detail = rows.first?.weeklyUsed == 100
                 ? "Your main account is full. This chat has a saved backup choice in Graft."
@@ -120,12 +121,12 @@ struct GraftConnectionView: View {
             detail = "Graft handles requests for this profile. This map shows which account answered."
         }
         var data = RoutingDisplay(title: L10n.text(title), detail: L10n.text(detail), ready: ready,
-                                  accounts: rows, lastAccount: success.map { accountName($0.servedBy, profile: profile) },
+                                  accounts: rows, lastAccount: success.map { accountName(accounts.canonical($0.servedBy), profile: profile) },
                                   lastModel: success?.model.map(RoutingDashboard.modelName), lastAnswered: success?.at)
         data.externallyManaged = true
         if let last = history.last {
             let ok = (200..<300).contains(last.status)
-            data.route = RouteMapSignal(phase: ok ? .answered : .failed, backup: last.servedBy != profile,
+            data.route = RouteMapSignal(phase: ok ? .answered : .failed, backup: accounts.canonical(last.servedBy) != profile,
                                         model: last.model.map(RoutingDashboard.modelName), at: last.at)
             if !ok { data.latestFailure = L10n.format("Request returned HTTP %ld", last.status) }
         }
