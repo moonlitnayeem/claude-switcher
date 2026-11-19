@@ -253,6 +253,12 @@
 "Checking its login…" = "Проверка данных входа…";
 "Full until %@" = "Лимит исчерпан до %@";
 "Full" = "Лимит исчерпан";
+"Fable resets %@" = "Лимит Fable обновится %@";
+"General allowance available" = "Общий лимит не исчерпан";
+"Recheck Fable" = "Проверить лимит Fable";
+"If the allowance reset early, try this account on your next Fable request." = "Если лимит обновился раньше срока, следующий запрос к Fable проверит эту учётную запись.";
+"Will recheck on the next Fable request" = "Проверка при следующем запросе к Fable";
+"The relay could not queue the Fable recheck." = "Не удалось запланировать проверку лимита Fable.";
 "This copy of Claude Graft has no relay in it." = "В этой копии Claude Graft нет ретранслятора.";
 "The relay is not running. Diagnostics has the reason." = "Ретранслятор не запущен. Причина записана в журнал диагностики.";
 "The relay could not be started." = "Не удалось запустить ретранслятор.";

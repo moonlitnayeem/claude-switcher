@@ -193,6 +193,7 @@ final class UsagePoolController: ObservableObject {
     @Published private(set) var accounts: [PoolAccount]
     @Published private(set) var status: PoolStatus?
     @Published private(set) var problem: String?
+    @Published private(set) var sendingFableRechecks: Set<String> = []
     /// Something is lent and this Graft cannot read the key the logins are
     /// sealed with, so the relay is left with what it was last told.
     @Published private(set) var lendingPaused = false
@@ -647,6 +648,21 @@ final class UsagePoolController: ObservableObject {
             _ = try? PoolSocket.send(PoolCommand(quit: true))
             self.lastSpawn = .distantPast
             DispatchQueue.main.async { self.sync() }
+        }
+    }
+
+    func recheckFable(_ lender: String) {
+        guard sendingFableRechecks.insert(lender).inserted else { return }
+        queue.async {
+            let status = try? PoolSocket.send(PoolCommand(recheckFable: lender))
+            DispatchQueue.main.async {
+                self.sendingFableRechecks.remove(lender)
+                guard let status else {
+                    self.problem = L10n.text("The relay could not queue the Fable recheck.")
+                    return
+                }
+                self.status = status
+            }
         }
     }
 

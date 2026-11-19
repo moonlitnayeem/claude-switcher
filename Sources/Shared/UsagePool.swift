@@ -20,7 +20,7 @@ enum UsagePool {
     /// Fixed, because it is written into a Claude's environment while that
     /// Claude is closed, and a session already running goes on using whatever
     /// it read when it started.
-    static let port: UInt16 = 47823
+    static let port: UInt16 = 47824
     static let host = "api.anthropic.com"
 
     /// Short on purpose: the control socket lives here, and a Unix socket path
@@ -66,32 +66,61 @@ struct PoolLimits: Codable, Equatable {
     var weekReset: Date?
     /// Set when the service said no outright, until the time it named.
     var refusedUntil: Date?
+    /// Included Fable usage can run out while other models still have room.
+    var fableRefusedUntil: Date?
     var observed: Date
 
     /// Every answer from `/v1/messages` carries the account's unified limits,
     /// so the relay learns an account's state from the very requests it sends
     /// there. Nil when the answer carried none, which is any request that
     /// never reached the model.
-    static func parse(_ headers: [(String, String)], now: Date = Date()) -> PoolLimits? {
+    static func parse(_ headers: [(String, String)], now: Date = Date(), model: String? = nil,
+                      rateLimited: Bool = false) -> PoolLimits? {
         func value(_ name: String) -> String? {
             headers.first { $0.0.caseInsensitiveCompare(name) == .orderedSame }?.1
         }
         func date(_ name: String) -> Date? {
-            value(name).flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
+            guard let seconds = value(name).flatMap(Double.init), seconds.isFinite else { return nil }
+            return Date(timeIntervalSince1970: seconds)
         }
         let prefix = "anthropic-ratelimit-unified-"
         let five = value(prefix + "5h-utilization").flatMap(Double.init)
         let week = value(prefix + "7d-utilization").flatMap(Double.init)
         let status = value(prefix + "status")
-        guard five != nil || week != nil || status != nil else { return nil }
+        let fiveRejected = value(prefix + "5h-status") == "rejected"
+        let weekRejected = value(prefix + "7d-status") == "rejected"
+        let fableRejected = value(prefix + "7d_oi-status") == "rejected"
+        let claim = value(prefix + "representative-claim")
+        let fableOnly = PoolRequest.isFable(model) && !fiveRejected && !weekRejected
+            && (claim == "seven_day_overage_included" || (claim == nil && fableRejected))
+        let rejected = rateLimited || status == "rejected" || fiveRejected || weekRejected
+            || (fableOnly && fableRejected)
+        guard five != nil || week != nil || status != nil || rejected else { return nil }
         var limits = PoolLimits(fiveHour: five ?? 0,
                                 fiveHourReset: date(prefix + "5h-reset"),
                                 week: week ?? 0,
                                 weekReset: date(prefix + "7d-reset"),
                                 refusedUntil: nil,
                                 observed: now)
-        if status == "rejected" {
-            limits.refusedUntil = date(prefix + "reset") ?? now.addingTimeInterval(60)
+        if rejected {
+            // The representative reset can belong to a different window when
+            // several have run out. Prefer the reset of the window that refused.
+            let windowReset: Date?
+            if fableOnly {
+                windowReset = date(prefix + "7d_oi-reset")
+            } else {
+                let fiveReset = (fiveRejected || claim == "five_hour") ? limits.fiveHourReset : nil
+                let weekReset = (weekRejected || claim == "seven_day") ? limits.weekReset : nil
+                windowReset = [fiveReset, weekReset].compactMap { $0 }.max()
+            }
+            let retry = value("retry-after").flatMap(Double.init)
+            let wait = retry.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 60
+            let until = windowReset ?? date(prefix + "reset") ?? now.addingTimeInterval(wait)
+            if fableOnly {
+                limits.fableRefusedUntil = until
+            } else {
+                limits.refusedUntil = until
+            }
         }
         return limits
     }
@@ -165,9 +194,10 @@ enum PoolPolicy {
         return reset
     }
 
-    static func hasRoom(_ limits: PoolLimits?, now: Date) -> Bool {
+    static func hasRoom(_ limits: PoolLimits?, now: Date, model: String? = nil) -> Bool {
         guard let limits else { return true }
         if let until = limits.refusedUntil, until > now { return false }
+        if PoolRequest.isFable(model), let until = limits.fableRefusedUntil, until > now { return false }
         if limits.fiveHour >= fiveHourCeiling, (limits.fiveHourReset ?? .distantFuture) > now { return false }
         if limits.week >= weekCeiling, (limits.weekReset ?? .distantFuture) > now { return false }
         return true
@@ -182,8 +212,9 @@ enum PoolPolicy {
     /// `prefer` goes in front of the ranking, first one first, for as long as
     /// each still has room: the account somebody chose for this conversation,
     /// then the one already holding its cache.
-    static func order(own: String, accounts: [Account], prefer: [String] = [], now: Date) -> [String] {
-        let open = accounts.filter { $0.usable && hasRoom($0.limits, now: now) }
+    static func order(own: String, accounts: [Account], prefer: [String] = [], now: Date,
+                      model: String? = nil) -> [String] {
+        let open = accounts.filter { $0.usable && hasRoom($0.limits, now: now, model: model) }
         var ids = open.sorted { a, b in
             let ra = nextWeekReset(a.limits?.weekReset, now: now)
             let rb = nextWeekReset(b.limits?.weekReset, now: now)
@@ -211,6 +242,7 @@ enum PoolPolicy {
         case deliver
         /// The account has no room. Try the next one.
         case exhausted(until: Date)
+        case fableExhausted(until: Date)
         /// A borrowed token was refused. It is not offered again until Graft
         /// hands over a different one.
         case loginRefused
@@ -219,13 +251,13 @@ enum PoolPolicy {
         case refusedForAccount
     }
 
-    static func outcome(status: Int, headers: [(String, String)], borrowed: Bool, now: Date) -> Outcome {
+    static func outcome(status: Int, headers: [(String, String)], borrowed: Bool, now: Date,
+                        model: String? = nil) -> Outcome {
         switch status {
         case 429:
-            let limits = PoolLimits.parse(headers, now: now)
-            let retry = headers.first { $0.0.caseInsensitiveCompare("retry-after") == .orderedSame }
-                .flatMap { Double($0.1) }
-            return .exhausted(until: limits?.refusedUntil ?? now.addingTimeInterval(retry ?? 60))
+            let limits = PoolLimits.parse(headers, now: now, model: model, rateLimited: true)
+            if let until = limits?.fableRefusedUntil { return .fableExhausted(until: until) }
+            return .exhausted(until: limits?.refusedUntil ?? now.addingTimeInterval(60))
         case 401:
             return borrowed ? .loginRefused : .deliver
         // One `where` would bind to the last pattern alone and send a 400 on
@@ -241,6 +273,10 @@ enum PoolPolicy {
 // MARK: - Requests
 
 enum PoolRequest {
+    static func isFable(_ model: String?) -> Bool {
+        model?.lowercased().hasPrefix("claude-fable-") == true
+    }
+
     /// The one request worth moving. `count_tokens` and everything under
     /// `/api/` stay with the account that sent them.
     static func isInference(method: String, target: String) -> Bool {
@@ -288,8 +324,12 @@ enum PoolRequest {
     static let reasoningTravels = ["claude-opus-5-5"]
 
     static func carriesBoundReasoning(body: Data) -> Bool {
+        carriesBoundReasoning(body: body, model: model(in: body))
+    }
+
+    static func carriesBoundReasoning(body: Data, model: String?) -> Bool {
         guard reasoningKeys.contains(where: { body.range(of: Data($0.utf8)) != nil }) else { return false }
-        guard let model = model(in: body) else { return true }
+        guard let model else { return true }
         return !reasoningTravels.contains { model.hasPrefix($0) }
     }
 
@@ -340,15 +380,19 @@ enum PoolRequest {
     /// answers by starting the thread again with everything in it.
     static let threadMissing = Data("thread_not_found".utf8)
 
-    /// For the record of what went where. The first `"model":` is the request's
-    /// own, Claude Code writing it ahead of the messages; a wrong guess here
-    /// mislabels one line on screen and decides nothing.
+    /// Only the top-level model decides which quota applies. Claude Code
+    /// normally writes it first, which saves parsing a long message history.
     static func model(in body: Data) -> String? {
-        let key = Data("\"model\":\"".utf8)
-        guard let start = body.range(of: key)?.upperBound else { return nil }
-        let window = body[start..<min(start + 120, body.endIndex)]
-        guard let end = window.firstIndex(of: UInt8(ascii: "\"")) else { return nil }
-        return String(decoding: body[start..<end], as: UTF8.self)
+        let prefix = Data("{\"model\":\"".utf8)
+        if body.starts(with: prefix) {
+            let field = body.dropFirst(prefix.count).prefix(120)
+            if let end = field.firstIndex(of: UInt8(ascii: "\"")) {
+                let name = field[..<end]
+                if !name.contains(UInt8(ascii: "\\")) { return String(data: name, encoding: .utf8) }
+            }
+        }
+        struct Request: Decodable { let model: String }
+        return (try? JSONDecoder().decode(Request.self, from: body))?.model
     }
 
     static func bearer(in headers: [(String, String)]) -> String? {
@@ -398,6 +442,8 @@ struct PoolConfiguration: Codable, Equatable {
 
 struct PoolCommand: Codable {
     var configure: PoolConfiguration?
+    /// A person has reset this account's Fable allowance in the provider's settings.
+    var recheckFable: String?
     /// Asks a relay built from a different binary to step aside: it stops
     /// listening at once and leaves when its last exchange finishes.
     var quit: Bool?
@@ -466,6 +512,7 @@ struct PoolMemberStatus: Codable, Equatable {
     /// only way to know a Claude is actually connected.
     var lastSeen: Date?
     var tokenRefused: Bool
+    var fableRecheckPending: Bool? = nil
 }
 
 struct PoolStatus: Codable, Equatable {

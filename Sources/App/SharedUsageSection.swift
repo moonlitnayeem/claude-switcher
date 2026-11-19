@@ -193,10 +193,35 @@ private struct LenderRow: View {
     @ObservedObject private var pool = Shared.usagePool
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            accountLine
+            if showsFableRecheck {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let until = reported?.limits?.fableRefusedUntil {
+                        Text(L10n.format("Fable resets %@", until.formatted(date: .abbreviated, time: .shortened)))
+                    }
+                    if reported?.fableRecheckPending == true {
+                        Text("Will recheck on the next Fable request")
+                    } else {
+                        Button("Recheck Fable") { pool.recheckFable(lender) }
+                            .controlSize(.small)
+                            .disabled(pool.sendingFableRechecks.contains(lender))
+                            .help("If the allowance reset early, try this account on your next Fable request.")
+                            .identified("lender.\(token).recheck-fable")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var accountLine: some View {
         let name = pool.name(of: lender)
         // One line per account: two bars under each of them made the list
         // taller than the window, and the figures read as well as text.
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
             // Name and state are one element, and the button beside them is
             // another: spoken over the whole row, the button took the row's
             // name and VoiceOver said the account twice and the action never.
@@ -236,7 +261,6 @@ private struct LenderRow: View {
             .accessibilityLabel(L10n.format("Stop drawing on %@", name))
             .identified("lender.\(token).remove")
         }
-        .padding(.vertical, 2)
     }
 
     private func figuresLine(_ figures: (fiveHour: Int?, fiveHourReset: Date?, week: Int, weekReset: Date?)) -> String {
@@ -253,6 +277,13 @@ private struct LenderRow: View {
 
     private var isAccount: Bool { lender.hasPrefix(UsagePoolController.accountPrefix) }
     private var reported: PoolMemberStatus? { pool.status?.members.first { $0.id == lender } }
+
+    private var showsFableRecheck: Bool {
+        guard isAccount, !sameAsBorrower, pool.lending[lender] == .ready,
+              let reported, !reported.tokenRefused,
+              PoolPolicy.hasRoom(reported.limits, now: Date()) else { return false }
+        return reported.fableRecheckPending == true || (reported.limits?.fableRefusedUntil ?? .distantPast) > Date()
+    }
 
     /// A Claude goes by its profile folder, as every other control naming a
     /// profile does, and an account by the id it was saved under, which is the
@@ -323,6 +354,7 @@ private struct LenderRow: View {
             }
             return L10n.text("Full")
         }
+        if showsFableRecheck { return L10n.text("General allowance available") }
         if let served = reported?.served, served > 0 {
             return L10n.format("Ready · answered %ld requests", served)
         }

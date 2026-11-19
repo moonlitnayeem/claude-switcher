@@ -53,24 +53,29 @@ final class Exchange {
     }
 
     func run() async {
+        let clients = state.clients
+        defer {
+            connection?.close()
+            client.close()
+            clients.remove(client)
+        }
+        guard clients.waitForRequest(on: client) else { return }
         do {
             try await client.open(timeout: 20)
-            while try await serveOne() {}
+            repeat {
+                guard let (head, raw) = try await client.readHead(limit: Self.headLimit, admit: {
+                    clients.beginRequest(on: self.client)
+                }), try await serve(head, raw: raw) else { return }
+            } while clients.waitForRequest(on: client)
         } catch {}
-        connection?.close()
-        client.close()
     }
 
     /// False when the connection should close after this request.
-    private func serveOne() async throws -> Bool {
-        guard let (head, raw) = try await client.readHead(limit: Self.headLimit) else { return false }
+    private func serve(_ head: HTTPHead, raw: Data) async throws -> Bool {
         guard head.line.count == 3, head.method != "CONNECT", let framing = head.requestBody else {
             try? await client.send(HTTPMessage.failure(400, "Bad Request", "The relay could not read that request."))
             return false
         }
-        await state.began()
-        defer { Task { await self.state.ended() } }
-
         if head.tokens("expect").contains("100-continue") {
             try await client.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8))
         }
@@ -98,16 +103,25 @@ final class Exchange {
         }
 
         let session = head.value("x-claude-code-session-id")
+        let model = PoolRequest.model(in: body)
         let pinned = PoolRequest.mustStayWithSender(body: body,
                                                     contentEncoding: head.value("content-encoding"))
         let continuing = PoolRequest.continuesThread(body: body)
         let attempts = await state.plan(own: own, session: session, pinned: pinned,
-                                        bound: continuing || PoolRequest.carriesBoundReasoning(body: body))
+                                        bound: continuing || PoolRequest.carriesBoundReasoning(body: body, model: model),
+                                        model: model, continuing: continuing)
 
         var passed: [PoolPass] = []
         var index = 0
         while index < attempts.count {
             let attempt = attempts[index]
+            defer {
+                // Transport errors and interrupted responses must release a
+                // claimed recheck as well as the normal response paths.
+                if let ticket = attempt.fableRecheck, let member = attempt.member {
+                    Task { await self.state.finishFableRecheck(member, ticket: ticket) }
+                }
+            }
             let last = index == attempts.count - 1
             let borrowed = attempt.token != nil
             // A moved thread's refusal is read to tell `thread_not_found` from
@@ -133,9 +147,8 @@ final class Exchange {
 
             let status = answer.head.status ?? 502
             if let member = attempt.member {
-                await state.observe(member, answer.head.pairs)
-                let outcome = PoolPolicy.outcome(status: status, headers: answer.head.pairs,
-                                                 borrowed: borrowed, now: Date())
+                let outcome = await state.observe(member, answer.head.pairs, status: status,
+                                                  borrowed: borrowed, model: model, recheck: attempt.fableRecheck)
                 if outcome == .refusedForAccount, status == 404, continuing, !last,
                    let missing = try await threadMissing(answer, method: head.method) {
                     // The thread is stored on the account the conversation
@@ -143,21 +156,24 @@ final class Exchange {
                     // Claude Code answers this by sending everything as a new
                     // thread, which this account can take.
                     Diagnostics.note("relay thread restarted", ["member": member])
+                    if let ticket = attempt.fableRecheck {
+                        await state.finishFableRecheck(member, ticket: ticket, newThreadFor: session, threadMissing: true)
+                    }
                     await state.served(by: member, from: own, session: session, status: status,
-                                       passedOver: passed, model: PoolRequest.model(in: body),
+                                       passedOver: passed, model: model,
                                        cacheLifetime: PoolPolicy.cacheLifetime(of: body), threaded: true,
                                        starts: PoolRequest.startsConversation(body: body),
                                        prompted: PoolRequest.startsTurn(body: body))
                     return try await deliver(answer, body: missing, method: head.method, keepAlive: head.keepsAlive)
                 }
+                if let ticket = attempt.fableRecheck { await state.finishFableRecheck(member, ticket: ticket) }
                 if outcome != .deliver, !last {
-                    await state.apply(outcome, to: member)
                     // Its answer is a few hundred bytes nobody will read, and
                     // dropping the connection is cheaper than draining it.
                     connection?.close()
                     connection = nil
                     switch outcome {
-                    case .exhausted:
+                    case .exhausted, .fableExhausted:
                         passed.append(PoolPass(id: member, reason: .full))
                         index += 1
                     case .loginRefused:
@@ -174,6 +190,8 @@ final class Exchange {
                     }
                     var noted: [String: Any] = ["member": member, "status": status,
                                                 "reason": passed.last!.reason.rawValue]
+                    if case .fableExhausted = outcome { noted["limitScope"] = "fable" }
+                    if case .exhausted = outcome { noted["limitScope"] = "account" }
                     if continuing { noted["thread"] = "continue" }
                     if let refusal { noted["error"] = refusal }
                     refusal = nil
@@ -181,11 +199,11 @@ final class Exchange {
                     continue
                 }
                 await state.served(by: member, from: own, session: session, status: status,
-                                   passedOver: passed, model: PoolRequest.model(in: body),
+                                   passedOver: passed, model: model,
                                    cacheLifetime: PoolPolicy.cacheLifetime(of: body),
                                    threaded: PoolRequest.carriesThread(body: body),
                                    starts: PoolRequest.startsConversation(body: body),
-                                       prompted: PoolRequest.startsTurn(body: body))
+                                   prompted: PoolRequest.startsTurn(body: body))
             }
             return try await deliver(answer, method: head.method, keepAlive: head.keepsAlive)
         }

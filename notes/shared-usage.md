@@ -134,8 +134,13 @@ memory alone, so a relay that restarts knows nothing until Graft configures it
 again and passes every request through untouched meanwhile: unshared, never
 broken. Graft replaces a relay built from a different binary by asking it to
 step aside, and the relay stops listening before it answers, so the replacement
-can bind the port at once, then leaves when its last exchange ends, fifteen
-minutes at most. What does break a connected Claude is no relay at all, since
+can bind the port at once. Idle HTTP connections close during the handover.
+A request already in progress can finish its reply, and an upgraded socket
+can drain for up to fifteen minutes. The old relay then closes the client
+connection so the next turn goes to the current relay. Leaving idle
+connections open alongside one long-lived exchange allowed a conversation
+to keep using a quota refusal that the replacement had already cleared.
+What does break a connected Claude is no relay at all, since
 the proxy it was told to use refuses the connection. That is why the pane asks
 for Open at Login, why a launcher that finds no relay opens without the lines,
 and why the lines come out before the relay goes.
@@ -368,9 +373,18 @@ conversation — the dropdown named the account that answered the title, and
 the next turn was steered there to be refused. Once a session has been seen
 with a thread, only an answer to a request with one says where it is.
 
-What comes back decides what happens next, from the status line alone. A 429
-marks the account full until the reset it names and the request goes on to the
-next; a 401 on a borrowed login marks that login refused until Graft hands over
+On a 429 the relay tries the same model on the next eligible account. For a
+Fable request, a rejected `7d_oi` window or a `seven_day_overage_included`
+claim can identify the included Fable allowance as the limit. In that case
+only Fable waits until the provider's reset. A general five-hour or weekly
+rejection takes precedence. An ambiguous 429 continues to hold the account
+for every model. A successful request on another model or a general usage
+poll leaves the Fable reset in place. An account signed in through Graft
+can have its allowance restored before that deadline. For that case, the
+lender row offers Recheck Fable. It reserves one actual Fable turn for the
+account. The relay keeps the hold for concurrent turns until the service
+answers. A success reopens routing and another 429 supplies the new deadline.
+The control itself sends no model request. A 401 on a borrowed login marks that login refused until Graft hands over
 another; a 400, 403 or 404 on a borrowed login sends the request home — to the
 sender's next attempt, not to the last in line, which with three accounts
 ranked lender, sender, lender was the other lender — since

@@ -253,6 +253,12 @@
 "Checking its login…" = "Checking its login…";
 "Full until %@" = "Full until %@";
 "Full" = "Full";
+"Fable resets %@" = "Fable resets %@";
+"General allowance available" = "General allowance available";
+"Recheck Fable" = "Recheck Fable";
+"If the allowance reset early, try this account on your next Fable request." = "If the allowance reset early, try this account on your next Fable request.";
+"Will recheck on the next Fable request" = "Will recheck on the next Fable request";
+"The relay could not queue the Fable recheck." = "The relay could not queue the Fable recheck.";
 "This copy of Claude Graft has no relay in it." = "This copy of Claude Graft has no relay in it.";
 "The relay is not running. Diagnostics has the reason." = "The relay is not running. Diagnostics has the reason.";
 "The relay could not be started." = "The relay could not be started.";

@@ -81,18 +81,28 @@ class Service(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers(); self.wfile.write(payload); return
+        gate = state.get("gate")
+        if gate and self.headers.get("X-Claude-Code-Session-Id") == gate[0]:
+            gate[1].set()
+            gate[2].wait(5)
         if state.get("refuse"):
             payload = b'{"type":"error","error":{"type":"authentication_error"}}'
             self.send_response(state["refuse"])
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers(); self.wfile.write(payload); return
-        limits = {"anthropic-ratelimit-unified-5h-utilization": str(state["5h"]),
-                  "anthropic-ratelimit-unified-7d-utilization": str(state["7d"]),
-                  "anthropic-ratelimit-unified-5h-reset": str(int(now + 3600)),
+        limits = {"anthropic-ratelimit-unified-7d-utilization": str(state["7d"]),
                   "anthropic-ratelimit-unified-7d-reset": str(int(state["7d-reset"]))}
-        if state["reject"]:
+        if state.get("5h") is not None:
+            limits["anthropic-ratelimit-unified-5h-utilization"] = str(state["5h"])
+            limits["anthropic-ratelimit-unified-5h-reset"] = str(int(now + 3600))
+        model_rejection = None
+        if state.get("model_rejections"):
+            model_rejection = state["model_rejections"].get(json.loads(body)["model"])
+        if state["reject"] or model_rejection:
             payload = b'{"type":"error","error":{"type":"rate_limit_error"}}'
             self.send_response(429)
+            if model_rejection:
+                limits.update({"anthropic-ratelimit-unified-" + key: val for key, val in model_rejection.items()})
             for k, v in limits.items(): self.send_header(k, v)
             self.send_header("anthropic-ratelimit-unified-status", "rejected")
             self.send_header("anthropic-ratelimit-unified-reset", str(int(now + 1800)))
@@ -264,6 +274,81 @@ check(recent["servedBy"] == "A" and recent["passedOver"] == [{"id": "B", "reason
       "the record says which account was passed over and why")
 accounts["tok-B"]["reject"] = False
 
+# Fable may run out on a lender whose other models still have room.
+fable_model = "claude-fable-5-2"
+def check_model_route(model, expected, message, sender="tok-scope-home"):
+    body = json.dumps({"model": model, "messages": []}, separators=(",", ":")).encode()
+    response, _, went = ask(conn, sender, session=None, body=body)
+    check(response.status == 200 and [w["token"] for w in went] == expected, message)
+
+def push_scope_pool(scope, lend=True):
+    control({"configure": {"enabled": True, "members": [
+        dict(member("scope-home", "tok-scope-home", borrows=[scope]), limits=pushed(now + 5 * 86400)),
+        member("scope-independent", "tok-independent", borrows=[]),
+        dict(member(scope, "tok-" + scope, lend=lend), limits=pushed(now + 86400))]}})
+
+accounts["tok-scope-home"] = {"7d": 0.2, "7d-reset": now + 5 * 86400, "reject": False}
+accounts["tok-independent"] = {"7d": 0.1, "7d-reset": now + 6 * 86400, "reject": False}
+for scope, refusal, model_only in [
+    ("fable-status", {"7d-status": "allowed", "7d_oi-status": "rejected"}, True),
+    ("fable-claim", {"7d-status": "allowed", "representative-claim": "seven_day_overage_included"}, True),
+    ("weekly", {"7d-status": "rejected", "7d_oi-status": "rejected"}, False),
+    ("five-hour", {"5h-status": "rejected", "7d-status": "allowed",
+                   "representative-claim": "seven_day_overage_included"}, False),
+]:
+    lender = "tok-" + scope
+    accounts[lender] = {"7d": 0.7, "7d-reset": now + 86400, "reject": False,
+                        "model_rejections": {fable_model: refusal}}
+    push_scope_pool(scope)
+    control({"recheckFable": scope})
+    check_model_route(fable_model, [lender, "tok-scope-home"], scope + " falls back after the first 429")
+    check_model_route(fable_model, ["tok-scope-home"], scope + " skips a held lender for Fable")
+    if model_only:
+        check_model_route("claude-opus-5-5", [lender], scope + " keeps Opus available on the lender")
+        check_model_route(fable_model, ["tok-scope-home"], scope + " survives another model succeeding")
+        push_scope_pool(scope)
+        check_model_route(fable_model, ["tok-scope-home"], scope + " survives a fresh general usage reading")
+        control({"recheckFable": "no-such-lender"})
+        check_model_route(fable_model, ["tok-scope-home"], "rechecking an unknown account leaves the lender held")
+        push_scope_pool(scope, lend=False)
+        control({"recheckFable": scope})
+        check_model_route(fable_model, ["tok-scope-home"], "a recheck cannot lend an unavailable login")
+        push_scope_pool(scope)
+        control({"recheckFable": scope})
+        check_model_route(fable_model, ["tok-independent"], "a recheck respects the sender's lending list",
+                          sender="tok-independent")
+        check_model_route("claude-opus-5-5", [lender], "an Opus request does not spend the Fable recheck")
+        if scope == "fable-status":
+            accounts[lender]["model_rejections"].clear()
+            check_model_route(fable_model, [lender], "a reset lets the next real Fable request use the lender")
+            check_model_route(fable_model, [lender], "a successful Fable recheck reopens ordinary routing")
+        else:
+            new_reset = int(now + 900)
+            refusal["7d_oi-reset"] = str(new_reset)
+            check_model_route(fable_model, [lender, "tok-scope-home"], "a recheck tries the held lender once")
+            check_model_route(fable_model, ["tok-scope-home"], "a second Fable refusal restores the hold")
+            status = next(entry for entry in control({})["members"] if entry["id"] == scope)
+            check(status["limits"].get("fableRefusedUntil") == new_reset - 978307200,
+                  "a recheck that is refused uses the provider's newly returned Fable reset")
+    else:
+        control({"recheckFable": scope})
+        check_model_route(fable_model, ["tok-scope-home"], scope + " cannot be overridden by a Fable recheck")
+        check_model_route("claude-opus-5-5", ["tok-scope-home"], scope + " blocks the lender across models")
+
+# A regular Fable request starts at home. The service reports a full general
+# week there, while the lender can still answer the very same request.
+accounts["tok-fable-home"] = {"7d": 1.0, "7d-reset": now + 86400, "reject": False,
+                              "model_rejections": {fable_model: {"7d-status": "rejected"}}}
+accounts["tok-fable-lender"] = {"7d": 0.7, "7d-reset": now + 5 * 86400, "reject": False}
+control({"configure": {"enabled": True, "members": [
+    dict(member("fable-home", "tok-fable-home", borrows=["fable-lender"]), limits=pushed(now + 86400)),
+    dict(member("fable-lender", "tok-fable-lender"), limits=pushed(now + 5 * 86400))]}})
+fable_turn = b'{"model":"claude-fable-5-2","messages":[{"role":"user","content":"test"}]}'
+response, payload, went = ask(conn, "tok-fable-home", body=fable_turn, session="fable-home-limit")
+check(response.status == 200 and payload == b"".join(STREAM)
+      and [(w["token"], w["body"]) for w in went] == [("tok-fable-home", fable_turn), ("tok-fable-lender", fable_turn)],
+      "a full home account automatically sends the identical Fable 5.2 request to an eligible lender")
+
 # A third account whose login the service refuses: once, then never again.
 status = control({"configure": {"enabled": True, "members": [
     member("A", "tok-A", borrows=["B", "C"]),
@@ -371,6 +456,15 @@ def read_until(s, marker):
         pass
     return data
 
+def closed_promptly(s):
+    s.settimeout(2)
+    try:
+        return s.recv(1) == b""
+    except (ConnectionResetError, ssl.SSLEOFError, ssl.SSLZeroReturnError):
+        return True
+    except socket.timeout:
+        return False
+
 before = len(seen)
 s = tunnel()
 s.settimeout(5)
@@ -470,6 +564,62 @@ def ask_thread(token, session, body):
 def holder(session):
     return {entry["id"]: entry for entry in control({})["sessions"]}.get(session, {}).get("servedBy")
 title = b'{"model":"claude-haiku-5-5","messages":[{"role":"user","content":"name this"}]}'
+
+# Hold one caller inside the fake service while another caller tries the
+# same model. Only one outstanding request can own an early recheck.
+scope = "fable-concurrent"
+lender = "tok-" + scope
+accounts[lender] = {"7d": 0.7, "7d-reset": now + 86400, "reject": False,
+                    "model_rejections": {fable_model: {"7d_oi-status": "rejected"}}}
+push_scope_pool(scope)
+check_model_route(fable_model, [lender, "tok-scope-home"], "the concurrent-call fixture learns a Fable hold")
+def recheck_pending(status):
+    return any(row.get("fableRecheckPending") for row in status["members"] if row["id"] == scope)
+check(recheck_pending(control({"recheckFable": scope})), "the lender reports that a Fable recheck is queued")
+entered, release = threading.Event(), threading.Event()
+accounts[lender]["gate"] = ("fable-in-flight", entered, release)
+first_reply = []
+def send_held_request():
+    separate = connection()
+    try:
+        reply, _, attempts = ask(separate, "tok-scope-home", body=fable_turn, session="fable-in-flight")
+        first_reply.append((reply.status, [w["token"] for w in attempts if w["session"] == "fable-in-flight"]))
+    finally:
+        separate.close()
+first = threading.Thread(target=send_held_request, daemon=True)
+first.start()
+try:
+    check(entered.wait(3), "the first caller claims the Fable recheck before its reply arrives")
+    check(recheck_pending(control({})), "the recheck remains pending while the lender is answering")
+    control({"recheckFable": scope})
+    response, _, went = ask(conn, "tok-scope-home", body=fable_turn, session="fable-second-caller")
+    check(response.status == 200 and [w["token"] for w in went if w["session"] == "fable-second-caller"] == ["tok-scope-home"],
+          "a simultaneous Fable request cannot spend the same recheck even after a second click")
+finally:
+    release.set()
+    first.join(timeout=6)
+check(first_reply == [(200, [lender, "tok-scope-home"])] and not recheck_pending(control({})),
+      "only the first request probes the lender and its refusal clears the pending indicator")
+del accounts[lender]["gate"]
+
+# A provider-held thread starts afresh when the new lender has never seen it.
+# That continuation belongs to the client that received the missing-thread reply.
+accounts[lender]["model_rejections"].clear()
+control({"recheckFable": scope})
+threads["main-held-thread"] = "tok-scope-home"
+continued = threaded("continue", "main-held-thread").replace(b"claude-opus-5-5", fable_model.encode())
+response, payload, went = ask_thread("tok-scope-home", "fable-moved-thread", continued)
+check(response.status == 404 and b"thread_not_found" in payload and [w["token"] for w in went] == [lender],
+      "the recheck returns the genuine missing-thread reply from the lender")
+check(recheck_pending(control({})), "the lender waits for the client to resend the full conversation")
+created = threaded("create").replace(b"claude-opus-5-5", fable_model.encode())
+response, _, went = ask_thread("tok-scope-home", "fable-other-thread", created)
+check(response.status == 200 and [w["token"] for w in went] == ["tok-scope-home"],
+      "a different session cannot spend the same client's missing-thread retry")
+response, payload, went = ask_thread("tok-scope-home", "fable-moved-thread", created)
+check(response.status == 200 and payload == b"".join(STREAM) and [w["token"] for w in went] == [lender]
+      and not recheck_pending(control({})), "the client's full new thread reaches the lender and completes the recheck")
+check_model_route(fable_model, [lender], "a successful thread restart reopens the lender for Fable")
 
 thread_pool("G", "H", 95)
 response, payload, went = ask_thread("tok-H", "s40", threaded("create"))
@@ -651,13 +801,26 @@ check(open(ca, "rb").read() == authority and not os.path.exists(leaf),
       "and without renewing the certificate the first one presents")
 open(leaf, "wb").write(presented)
 
+# One upgraded socket holds the old process open while a normal connection is
+# idle between requests and another has a body still being streamed.
+upgrade = tunnel()
+upgrade.sendall(b"GET /v1/sessions/ws/handover HTTP/1.1\r\nHost: api.anthropic.com\r\n"
+                b"Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+check(read_until(upgrade, b"\r\n\r\n").startswith(b"HTTP/1.1 101"), "the handover starts with a live socket")
+idle = connection()
+response, _, _ = ask(idle, "tok-A", session="before-handover")
+check(response.status == 200 and idle.sock is not None, "a client has an idle keep-alive after its first answer")
+unused = tunnel()
+stream = tunnel()
+stream.sendall(b"POST /v1/sessions/handover/events HTTP/1.1\r\nHost: api.anthropic.com\r\n"
+               b"Transfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n")
+check(b"got first" in read_until(stream, b"got first"), "an independent request is streaming at handover")
 control({"quit": True})
 check(not os.path.exists(socket_path), "a relay stepping aside takes its socket with it")
-try:
-    relay.wait(timeout=10)
-except subprocess.TimeoutExpired:
-    relay.kill()
-check(relay.returncode == 0, "and leaves once nothing is in flight")
+check(closed_promptly(idle.sock), "a retired relay closes the idle HTTP keep-alive while an upgraded socket stays open")
+idle.close()
+check(closed_promptly(unused), "a retired relay closes an idle TLS connection waiting for its first request")
+unused.close()
 replacement = subprocess.Popen(args, cwd=work, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 for _ in range(100):
     if os.path.exists(socket_path): break
@@ -667,6 +830,27 @@ conn = connection()
 response, payload, went = ask(conn, "tok-A")
 check(response.status == 200 and [w["token"] for w in went] == ["tok-A"],
       "and starts out passing everything through until it is told otherwise")
+control({"configure": {"enabled": True, "members": [
+    dict(member("new-home", "tok-A", borrows=["new-lender"]), limits=pushed(now + 5 * 86400)),
+    dict(member("new-lender", "tok-B"), limits=pushed(now + 3600))]}})
+response, _, went = ask(conn, "tok-A", session="after-handover")
+replacement_routes = control({})["recent"]
+check(response.status == 200 and [w["token"] for w in went] == ["tok-B"]
+      and replacement_routes and replacement_routes[-1].get("session") == "after-handover",
+      "the next request reaches the replacement and uses its routing configuration")
+stream.sendall(b"6\r\nsecond\r\n0\r\n\r\n")
+check(b"got second" in read_until(stream, b"0\r\n\r\n"), "the old relay lets the active HTTP stream finish")
+check(closed_promptly(stream), "the old relay closes that HTTP connection after delivering its complete response")
+stream.close()
+upgrade.sendall(b"still live")
+check(b"still live" in read_until(upgrade, b"still live") and relay.poll() is None,
+      "the old upgraded connection continues to carry traffic normally throughout handover")
+upgrade.close()
+try:
+    relay.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    relay.kill()
+check(relay.returncode == 0, "the retired relay leaves once its final upgraded connection finishes")
 conn.close()
 control({"quit": True})
 try:

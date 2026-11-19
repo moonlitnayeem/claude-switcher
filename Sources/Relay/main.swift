@@ -30,7 +30,8 @@ final class Relay {
     private var innerPort: NWEndpoint.Port?
     private var control: ControlServer?
     private var lock: Int32 = -1
-    private var quitting = false
+    private let handoverLock = NSLock()
+    private var handover: Task<Void, Never>?
     private var watch: DispatchSourceTimer?
     private var missing = 0
     private var remembered: PoolEnvironment.Journal?
@@ -193,9 +194,8 @@ final class Relay {
             let left = PoolEnvironment.takeOutLines(self.remembered, running: Graft.isRunning(profile:))
             guard left.isEmpty else { return }
             Task {
-                guard await self.state.inFlight == 0 else { return }
-                self.control?.stop()
-                exit(0)
+                guard self.state.clients.inFlight == 0 else { return }
+                await self.stepAside()
             }
         }
         timer.resume()
@@ -206,6 +206,7 @@ final class Relay {
         if let configuration = command.configure {
             await state.configure(configuration)
         }
+        if let member = command.recheckFable { await state.recheckFable(member) }
         if command.quit == true {
             await stepAside()
         }
@@ -221,8 +222,20 @@ final class Relay {
     /// holds open is cut no sooner than the quarter hour, and then reconnects
     /// to the new relay the way it would after any dropped network.
     private func stepAside() async {
-        guard !quitting else { return }
-        quitting = true
+        // Two quit commands must both be answered after the successor can
+        // take the lock and socket, and only the first may unlink that socket.
+        let task = handoverLock.withLock {
+            if let handover { return handover }
+            let task = Task { await releaseListeners() }
+            handover = task
+            return task
+        }
+        await task.value
+    }
+
+    private func releaseListeners() async {
+        state.clients.drain()
+        watch?.cancel()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let once = Once()
             front?.stateUpdateHandler = { state in
@@ -238,7 +251,7 @@ final class Relay {
         let deadline = Date().addingTimeInterval(15 * 60)
         Task.detached { [state] in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            while await state.inFlight > 0, Date() < deadline {
+            while state.clients.hasUnfinishedWork, Date() < deadline {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
             exit(0)
@@ -250,12 +263,17 @@ final class Relay {
     /// client that sends everything to the one proxy it was given.
     private func tunnel(_ connection: NWConnection) async {
         let client = Wire(connection, label: "relay.front")
+        let clients = state.clients
+        defer {
+            client.close()
+            clients.remove(client)
+        }
+        guard clients.waitForRequest(on: client) else { return }
         do {
             try await client.open(timeout: 10)
-            guard let (head, raw) = try await client.readHead(limit: 16384) else {
-                client.close()
-                return
-            }
+            guard let (head, raw) = try await client.readHead(limit: 16384, admit: {
+                clients.beginRequest(on: client)
+            }) else { return }
             if head.method == "CONNECT" {
                 guard let (host, port) = Relay.authority(head.target) else {
                     try? await client.send(HTTPMessage.failure(400, "Bad Request", "The relay could not read that address."))
@@ -269,7 +287,12 @@ final class Relay {
                     return
                 }
                 try await client.send(Data("HTTP/1.1 200 Connection Established\r\n\r\n".utf8))
-                await splice(client, far)
+                if intercept {
+                    clients.forwardTLS(on: client)
+                    await splice(client, far, replyEnded: { clients.remove(client) })
+                } else {
+                    await splice(client, far)
+                }
             } else if let url = URL(string: head.target), url.scheme == "http", let host = url.host {
                 guard let far = await reach((host, UInt16(url.port ?? 80))) else {
                     try? await client.send(HTTPMessage.failure(502, "Bad Gateway", "The relay could not reach \(host)."))

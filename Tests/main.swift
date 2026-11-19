@@ -6010,6 +6010,18 @@ do {
     check(PoolPolicy.outcome(status: 429, headers: [(prefix + "status", "rejected"), (prefix + "reset", stamp(hour))],
                              borrowed: false, now: now) == .exhausted(until: now + hour),
           "or until the reset it named")
+    let fable = "claude-fable-5-2"
+    let scopedHeaders = [(prefix + "status", "rejected"), (prefix + "7d_oi-status", "rejected"),
+                         (prefix + "7d_oi-reset", stamp(hour)), (prefix + "reset", stamp(day))]
+    let fableHold = PoolLimits.parse(scopedHeaders, now: now, model: fable)
+    check(fableHold?.fableRefusedUntil == now + hour && fableHold?.refusedUntil == nil,
+          "the Fable window keeps its own reset when the unified reset is later")
+    check(!PoolPolicy.hasRoom(fableHold, now: now, model: fable)
+          && PoolPolicy.hasRoom(fableHold, now: now + hour, model: fable),
+          "Fable automatically becomes eligible again at the scoped reset")
+    check(PoolPolicy.outcome(status: 429, headers: scopedHeaders + [(prefix + "representative-claim", "overage")],
+                             borrowed: true, now: now, model: fable) == .exhausted(until: now + day),
+          "an explicit general billing refusal holds the entire account")
     check(PoolPolicy.outcome(status: 401, headers: [], borrowed: true, now: now) == .loginRefused,
           "a borrowed login that is refused is not lent again")
     check(PoolPolicy.outcome(status: 401, headers: [], borrowed: false, now: now) == .deliver,
@@ -6194,7 +6206,7 @@ do {
           "and a login read whole always says what it says")
     check(UsagePool.digest("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
           "a login is known to the relay by its SHA-256 alone")
-    check(PoolEnvironment.lines == ["HTTPS_PROXY": "http://127.0.0.1:47823",
+    check(PoolEnvironment.lines == ["HTTPS_PROXY": "http://127.0.0.1:47824",
                                     "NODE_EXTRA_CA_CERTS": UsagePool.certificateFile.path],
           "Claude Code is pointed at a port on this Mac alone, and told to trust the relay's own certificate")
     check(UsagePool.certificateFile.path.hasSuffix("ClaudeGraft/pool/relay-ca.pem"),

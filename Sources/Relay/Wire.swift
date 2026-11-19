@@ -23,6 +23,68 @@ final class Once: @unchecked Sendable {
     }
 }
 
+/// A listener can stop accepting while keep-alives it already accepted keep
+/// sending new requests. Receipt of the first bytes and closing the idle
+/// sockets share one lock, so a request admitted before handover can finish.
+final class RelayClients: @unchecked Sendable {
+    private let lock = NSLock()
+    private var draining = false
+    private var idle: [ObjectIdentifier: Wire] = [:]
+    private var active: Set<ObjectIdentifier> = []
+    private var forwardingTLS: Set<ObjectIdentifier> = []
+
+    var inFlight: Int { lock.withLock { active.count } }
+    var hasUnfinishedWork: Bool { lock.withLock { !active.isEmpty || !forwardingTLS.isEmpty } }
+
+    func waitForRequest(on wire: Wire) -> Bool {
+        lock.withLock {
+            let id = ObjectIdentifier(wire)
+            active.remove(id)
+            guard !draining else { return false }
+            idle[id] = wire
+            return true
+        }
+    }
+
+    func beginRequest(on wire: Wire) -> Bool {
+        lock.withLock {
+            let id = ObjectIdentifier(wire)
+            guard idle.removeValue(forKey: id) != nil else { return false }
+            active.insert(id)
+            return true
+        }
+    }
+
+    func remove(_ wire: Wire) {
+        lock.withLock {
+            let id = ObjectIdentifier(wire)
+            idle[id] = nil
+            active.remove(id)
+            forwardingTLS.remove(id)
+        }
+    }
+
+    /// The inner request tracks the remaining HTTP work. The outer tunnel
+    /// must still forward the last TLS bytes to the client before we exit.
+    func forwardTLS(on wire: Wire) {
+        lock.withLock {
+            let id = ObjectIdentifier(wire)
+            active.remove(id)
+            forwardingTLS.insert(id)
+        }
+    }
+
+    func drain() {
+        let waiting = lock.withLock {
+            draining = true
+            let waiting = Array(idle.values)
+            idle.removeAll()
+            return waiting
+        }
+        for wire in waiting { wire.close() }
+    }
+}
+
 /// One connection, read into a buffer and written with backpressure. Every
 /// send waits for the network to take the bytes before the next is made, so a
 /// slow reader on one side slows the other rather than filling memory.
@@ -75,12 +137,16 @@ final class Wire: @unchecked Sendable {
 
     /// Reads whatever arrives next into the buffer. False once the other side
     /// has finished sending.
-    func fill() async throws -> Bool {
+    func fill(admit: (() -> Bool)? = nil) async throws -> Bool {
         if ended { return false }
         return try await withCheckedThrowingContinuation { continuation in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 18) { data, _, complete, error in
                 let got = data?.count ?? 0
                 if got > 0 {
+                    guard admit?() != false else {
+                        continuation.resume(throwing: RelayError.closed)
+                        return
+                    }
                     self.buffer.append(data!)
                     self.received += got
                 }
@@ -104,7 +170,12 @@ final class Wire: @unchecked Sendable {
     func takeAll() -> Data { take(buffer.count) }
 
     /// Nil on a clean end before a single byte of a new head.
-    func readHead(limit: Int) async throws -> (head: HTTPHead, raw: Data)? {
+    func readHead(limit: Int, admit: (() -> Bool)? = nil) async throws -> (head: HTTPHead, raw: Data)? {
+        var firstBytes = admit
+        if !buffer.isEmpty {
+            guard firstBytes?() != false else { throw RelayError.closed }
+            firstBytes = nil
+        }
         while true {
             if let length = HTTPHead.length(in: buffer) {
                 let raw = take(length)
@@ -112,10 +183,11 @@ final class Wire: @unchecked Sendable {
                 return (head, raw)
             }
             guard buffer.count <= limit else { throw RelayError.tooLarge }
-            guard try await fill() else {
+            guard try await fill(admit: firstBytes) else {
                 if buffer.isEmpty { return nil }
                 throw RelayError.truncated
             }
+            if !buffer.isEmpty { firstBytes = nil }
         }
     }
 
@@ -168,10 +240,13 @@ final class Wire: @unchecked Sendable {
 /// Bytes both ways until both sides are done. A tunnel the relay does not
 /// open is passed on untouched, and so is the TLS inside the one it does,
 /// on its way to the listener that takes it apart.
-func splice(_ a: Wire, _ b: Wire) async {
+func splice(_ a: Wire, _ b: Wire, replyEnded: (() -> Void)? = nil) async {
     await withTaskGroup(of: Void.self) { group in
         group.addTask { await pump(from: a, to: b) }
-        group.addTask { await pump(from: b, to: a) }
+        group.addTask {
+            await pump(from: b, to: a)
+            replyEnded?()
+        }
     }
     a.close()
     b.close()

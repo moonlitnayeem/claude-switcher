@@ -10,6 +10,7 @@ actor PoolState {
         var member: String?
         /// Nil means the token the request arrived with.
         var token: String?
+        var fableRecheck: UUID? = nil
     }
 
     private struct Runtime {
@@ -50,9 +51,16 @@ actor PoolState {
     /// By account rather than by member: two members on one account are one
     /// allowance, and what the service says about either is true of both.
     private var limits: [String: PoolLimits] = [:]
+    private enum FableRecheck {
+        case queued, sending(UUID)
+        // Claude Code can recreate a thread only after its first attempt on
+        // the other account reports that the old thread lives elsewhere.
+        case awaitingNewThread(session: String?, until: Date)
+    }
+    private var fableRechecks: [String: FableRecheck] = [:]
     private var conversations: [String: Conversation] = [:]
     private var recent: [PoolRouting] = []
-    private var active = 0
+    nonisolated let clients = RelayClients()
 
     private func accountKey(_ id: String) -> String {
         configuration?.members.first { $0.id == id }?.account ?? id
@@ -77,10 +85,9 @@ actor PoolState {
             // The service's own headers are fresher than any poll while the
             // account is in use, and a poll is fresher once it has gone quiet.
             let key = member.account ?? member.id
-            if let pushed = member.limits, pushed.observed > (limits[key]?.observed ?? .distantPast) {
-                let refused = limits[key]?.refusedUntil
+            if var pushed = member.limits, pushed.observed > (limits[key]?.observed ?? .distantPast) {
+                preserveCooldowns(in: &pushed, from: limits[key], now: now)
                 limits[key] = pushed
-                if let refused, refused > now { limits[key]?.refusedUntil = refused }
             }
             kept[member.id] = state
         }
@@ -89,6 +96,29 @@ actor PoolState {
         // what is held stays the size of what Graft describes.
         let named = Set(new.members.map { $0.account ?? $0.id })
         limits = limits.filter { named.contains($0.key) }
+        fableRechecks = fableRechecks.filter { key, check in
+            guard named.contains(key), (limits[key]?.fableRefusedUntil ?? .distantPast) > now
+            else { return false }
+            if case .awaitingNewThread(_, let until) = check { return until > now }
+            return true
+        }
+    }
+
+    func recheckFable(_ id: String, now: Date = Date()) {
+        guard let member = configuration?.members.first(where: { $0.id == id }),
+              member.token != nil, runtime[id]?.refusedToken == nil else { return }
+        let key = member.account ?? id
+        guard fableRechecks[key] == nil,
+              let reading = limits[key], (reading.fableRefusedUntil ?? .distantPast) > now,
+              PoolPolicy.hasRoom(reading, now: now) else { return }
+        fableRechecks[key] = .queued
+    }
+
+    func finishFableRecheck(_ id: String, ticket: UUID, newThreadFor session: String? = nil,
+                            threadMissing: Bool = false, now: Date = Date()) {
+        let key = accountKey(id)
+        guard case .sending(ticket) = fableRechecks[key] else { return }
+        fableRechecks[key] = threadMissing ? .awaitingNewThread(session: session, until: now + 60) : nil
     }
 
     /// Which member a token belongs to. Every request carrying one counts as
@@ -126,8 +156,8 @@ actor PoolState {
     /// conversation can take as it stands: one carrying reasoning that account
     /// wrote (`PoolRequest.carriesBoundReasoning`), or continuing a thread
     /// stored there (`PoolRequest.continuesThread`).
-    func plan(own: String, session: String?, pinned: Bool, bound: Bool = false,
-              now: Date = Date()) -> [Attempt] {
+    func plan(own: String, session: String?, pinned: Bool, bound: Bool = false, model: String? = nil,
+              continuing: Bool = false, now: Date = Date()) -> [Attempt] {
         let asSent = [Attempt(member: own, token: nil)]
         guard let configuration, configuration.enabled, !pinned,
               let sender = configuration.members.first(where: { $0.id == own })
@@ -137,9 +167,24 @@ actor PoolState {
         }
         let candidates = Self.candidates(for: sender, in: configuration.members, canLend: canLend)
         guard candidates.count > 1 else { return asSent }
+        var recheck: String?
         let accounts = candidates.map { member in
-            PoolPolicy.Account(id: member.id, limits: limits[member.account ?? member.id],
-                               usable: member.id == own || canLend(member))
+            let key = member.account ?? member.id
+            var reading = limits[key]
+            if recheck == nil, member.id != own, PoolRequest.isFable(model), canLend(member),
+               (reading?.fableRefusedUntil ?? .distantPast) > now, PoolPolicy.hasRoom(reading, now: now),
+               let requested = fableRechecks[key] {
+                switch requested {
+                case .queued:
+                    recheck = member.id
+                case .awaitingNewThread(let expected, let until) where !continuing && expected == session && until > now:
+                    recheck = member.id
+                default:
+                    break
+                }
+                if recheck == member.id { reading?.fableRefusedUntil = nil }
+            }
+            return PoolPolicy.Account(id: member.id, limits: reading, usable: member.id == own || canLend(member))
         }
         // One account is one candidate whichever name it came under, so a
         // name the relay did not count stands for the one it did: a choice
@@ -173,37 +218,82 @@ actor PoolState {
         // session, or one last answered by an account no longer lent — and
         // the sender's own account is where it began.
         if bound, holder == nil { prefer.append(own) }
-        var ids = PoolPolicy.order(own: own, accounts: accounts, prefer: prefer, now: now)
+        if let recheck { prefer.insert(recheck, at: 0) }
+        var ids = PoolPolicy.order(own: own, accounts: accounts, prefer: prefer, now: now, model: model)
         // The last word is always the sender's own account, asked again if it
         // was asked already: whatever the lent accounts answered last — a
         // refused login, a plan without the model, a limit with their own
         // reset times — is about a login Claude Code never sent.
         if ids.last != own { ids.append(own) }
         return ids.map { id in
-            id == own ? Attempt(member: own, token: nil)
-                : Attempt(member: id, token: candidates.first { $0.id == id }?.token)
+            if id == own { return Attempt(member: own, token: nil) }
+            var attempt = Attempt(member: id, token: candidates.first { $0.id == id }?.token)
+            if id == recheck {
+                let ticket = UUID()
+                fableRechecks[accountKey(id)] = .sending(ticket)
+                attempt.fableRecheck = ticket
+            }
+            return attempt
         }
     }
 
-    func observe(_ member: String, _ headers: [(String, String)], now: Date = Date()) {
-        guard let parsed = PoolLimits.parse(headers, now: now) else { return }
-        limits[accountKey(member)] = parsed
+    // A general usage poll or a successful answer on another model says
+    // nothing about a Fable refusal that the service has already timed.
+    private func preserveCooldowns(in reading: inout PoolLimits, from previous: PoolLimits?, now: Date) {
+        if let until = previous?.fableRefusedUntil, until > now {
+            reading.fableRefusedUntil = max(until, reading.fableRefusedUntil ?? .distantPast)
+        }
+        if let until = previous?.refusedUntil, until > now {
+            reading.refusedUntil = max(until, reading.refusedUntil ?? .distantPast)
+        }
     }
 
-    func apply(_ outcome: PoolPolicy.Outcome, to member: String, now: Date = Date()) {
+    func observe(_ member: String, _ headers: [(String, String)], status: Int, borrowed: Bool,
+                 model: String?, recheck: UUID? = nil, now: Date = Date()) -> PoolPolicy.Outcome {
+        let key = accountKey(member)
+        // Discard the old forecast only when the provider has answered the
+        // requested recheck with fresh allowance evidence.
+        if let recheck, case .sending(recheck) = fableRechecks[key],
+           (200..<300).contains(status) || status == 429 {
+            limits[key]?.fableRefusedUntil = nil
+        }
+        let previous = limits[key]
+        if var parsed = PoolLimits.parse(headers, now: now, model: model) {
+            // Refusals sometimes omit one or both regular usage figures.
+            // Missing data must not reopen an exhausted general window.
+            let names = Set(headers.map { $0.0.lowercased() })
+            if let previous {
+                if !names.contains("anthropic-ratelimit-unified-5h-utilization") {
+                    parsed.fiveHour = previous.fiveHour
+                    parsed.fiveHourReset = parsed.fiveHourReset ?? previous.fiveHourReset
+                }
+                if !names.contains("anthropic-ratelimit-unified-7d-utilization") {
+                    parsed.week = previous.week
+                    parsed.weekReset = parsed.weekReset ?? previous.weekReset
+                }
+            }
+            preserveCooldowns(in: &parsed, from: previous, now: now)
+            limits[key] = parsed
+        }
+        let outcome = PoolPolicy.outcome(status: status, headers: headers, borrowed: borrowed,
+                                         now: now, model: model)
         switch outcome {
         case .deliver, .refusedForAccount:
             break
-        case .exhausted(let until):
-            let key = accountKey(member)
+        case .exhausted(let until), .fableExhausted(let until):
             var known = limits[key]
                 ?? PoolLimits(fiveHour: 0, fiveHourReset: nil, week: 0, weekReset: nil,
                               refusedUntil: nil, observed: now)
-            known.refusedUntil = until
+            if case .fableExhausted = outcome {
+                known.fableRefusedUntil = max(until, known.fableRefusedUntil ?? .distantPast)
+            } else {
+                known.refusedUntil = max(until, known.refusedUntil ?? .distantPast)
+            }
             limits[key] = known
         case .loginRefused:
             runtime[member, default: Runtime()].refusedToken = lendingDigest[member]
         }
+        return outcome
     }
 
     func served(by member: String, from own: String, session: String?, status: Int,
@@ -241,17 +331,14 @@ actor PoolState {
         if recent.count > 40 { recent.removeFirst(recent.count - 40) }
     }
 
-    func began() { active += 1 }
-    func ended() { active -= 1 }
-    var inFlight: Int { active }
-
     func status(binary: String, pid: Int32, started: Date, now: Date = Date()) -> PoolStatus {
         let members = (configuration?.members ?? []).map { member in
             let state = runtime[member.id]
             return PoolMemberStatus(id: member.id, limits: limits[member.account ?? member.id],
                                     served: state?.served ?? 0, lastServed: state?.lastServed,
                                     lastSeen: state?.lastSeen,
-                                    tokenRefused: state?.refusedToken != nil)
+                                    tokenRefused: state?.refusedToken != nil,
+                                    fableRecheckPending: fableRechecks[member.account ?? member.id] == nil ? nil : true)
         }
         let sessions = conversations
             .filter { now.timeIntervalSince($0.value.lastAt) < Self.conversationMemory }
@@ -268,6 +355,6 @@ actor PoolState {
         return PoolStatus(binary: binary, pid: pid, started: started,
                           enabled: configuration?.enabled ?? false,
                           configured: configuration != nil, members: members,
-                          recent: recent, sessions: Array(sessions), openExchanges: active)
+                          recent: recent, sessions: Array(sessions), openExchanges: clients.inFlight)
     }
 }
