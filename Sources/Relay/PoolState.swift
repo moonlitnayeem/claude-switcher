@@ -1,9 +1,7 @@
 import Foundation
 
-/// Everything the relay knows, which is only what Graft last told it and what
-/// the service has said since. Nothing here is written to disk: tokens least
-/// of all, and a restarted relay passes every request through untouched until
-/// Graft has told it again.
+/// Membership, credentials and provider observations live in memory. A local
+/// restriction contains only account identifiers and survives relay replacement.
 actor PoolState {
     struct Attempt: Equatable {
         /// Nil for a request from nobody in the pool, which goes out as sent.
@@ -25,6 +23,7 @@ actor PoolState {
     private struct Conversation {
         var from: String
         var servedBy: String?
+        var servedAccount: String?
         var lastAt: Date
         var requests = 0
         var model: String?
@@ -45,6 +44,8 @@ actor PoolState {
     static let conversationMemory: TimeInterval = 24 * 60 * 60
 
     private var configuration: PoolConfiguration?
+    private var policy = AccountPolicyStore(directory: UsagePool.directory)
+    private var acceptsPolicyChanges = true
     private var pausedProfiles: Set<String> = []
     private var memberByDigest: [String: String] = [:]
     private var lendingDigest: [String: String] = [:]
@@ -63,8 +64,22 @@ actor PoolState {
     private var recent: [PoolRouting] = []
     private var activeRoutes: [UUID: PoolActiveRoute] = [:]
 
-    func beginAttempt(_ id: UUID, from: String, member: String, model: String?) {
+    func beginAttempt(_ id: UUID, from: String, attempt: Attempt, model: String?,
+                      selection: AccountPolicyStore.Selection?) -> Bool {
+        guard policy.readError == nil, selection == policy.selections[from] else { return false }
+        let member = attempt.member ?? from
+        if let selection {
+            guard member == selection.member,
+                  let sender = validatedMember(from, account: selection.profileAccount), sender.borrowsFrom != nil,
+                  let selected = validatedMember(member, account: selection.memberAccount) else { return false }
+            if member != from {
+                guard configuration?.enabled == true, !pausedProfiles.contains(from),
+                      sender.borrowsFrom?.contains(member) == true, attempt.token != nil,
+                      selected.token == attempt.token, runtime[member]?.refusedToken == nil else { return false }
+            }
+        }
         activeRoutes[id] = PoolActiveRoute(from: from, member: member, model: model, startedAt: Date())
+        return true
     }
 
     func finishRequest(_ id: UUID) {
@@ -75,6 +90,59 @@ actor PoolState {
 
     private func accountKey(_ id: String) -> String {
         configuration?.members.first { $0.id == id }?.account ?? id
+    }
+
+    func stopPolicyChanges() { acceptsPolicyChanges = false }
+
+    func policyBlocksPassThrough(for own: String?) -> Bool {
+        if policy.readError != nil { return true }
+        guard let own else { return !policy.selections.isEmpty }
+        guard let choice = policy.selections[own] else { return false }
+        return choice.member != own || validatedMember(own, account: choice.profileAccount) == nil
+    }
+
+    private func validatedMember(_ id: String, account: String) -> PoolMember? {
+        let matches = configuration?.members.filter { $0.id == id } ?? []
+        guard matches.count == 1, matches[0].account == account else { return nil }
+        return matches[0]
+    }
+
+    private func selectableAccounts(for sender: PoolMember, in members: [PoolMember]) -> [PoolMember] {
+        guard acceptsPolicyChanges, policy.readError == nil, sender.borrowsFrom != nil,
+              AccountPolicyStore.validID(sender.id), let profileAccount = sender.account,
+              AccountPolicyStore.validID(profileAccount), validatedMember(sender.id, account: profileAccount) != nil,
+              sender.identify.contains(where: { memberByDigest[$0] == sender.id }) else { return [] }
+        func available(_ member: PoolMember) -> Bool {
+            member.token != nil && runtime[member.id]?.refusedToken == nil
+        }
+        return Self.candidates(for: sender, in: members, canLend: available).filter { member in
+            guard AccountPolicyStore.validID(member.id), let account = member.account,
+                  AccountPolicyStore.validID(account), validatedMember(member.id, account: account) != nil
+            else { return false }
+            return member.id == sender.id || (configuration?.enabled == true && available(member))
+        }
+    }
+
+    private func setAccountPolicy(_ change: PoolAccountPolicyChange) -> String? {
+        guard acceptsPolicyChanges else { return "The relay is restarting. Try again in a moment." }
+        if let error = policy.readError { return error }
+        guard AccountPolicyStore.validID(change.profile) else { return "Choose a known Claude profile." }
+        let members = configuration?.members ?? []
+        let senders = members.filter { $0.id == change.profile && $0.borrowsFrom != nil }
+        if change.mode == .automatic {
+            guard change.member == nil, senders.count == 1 || policy.selections[change.profile] != nil else {
+                return "Choose a known Claude profile to turn on automatic switching."
+            }
+            return policy.save(nil, for: change.profile)
+        }
+        guard senders.count == 1, let sender = senders.first, let profileAccount = sender.account else {
+            return "The relay cannot confirm this profile's account yet."
+        }
+        guard let id = change.member, let selected = selectableAccounts(for: sender, in: members).first(where: { $0.id == id }),
+              let account = selected.account else {
+            return "Choose an available account already connected to this profile."
+        }
+        return policy.save(.init(member: id, profileAccount: profileAccount, memberAccount: account), for: sender.id)
     }
 
     func updateRouting(_ replacement: PoolConfiguration?, paused: Set<String>?, allowedLenders: [String: [String]]?) {
@@ -155,10 +223,10 @@ actor PoolState {
 
     /// Which member a token belongs to. Every request carrying one counts as
     /// that Claude being connected, whatever the request was for.
-    func member(for bearer: String, now: Date = Date()) -> String? {
+    func member(for bearer: String, now: Date = Date()) -> (id: String, restricted: Bool)? {
         guard let id = memberByDigest[UsagePool.digest(bearer)] else { return nil }
         runtime[id, default: Runtime()].lastSeen = now
-        return id
+        return (id, policy.selections[id] != nil)
     }
 
     /// The sender first, then the accounts it was given, each account once. A
@@ -188,9 +256,31 @@ actor PoolState {
     /// conversation can take as it stands: one carrying reasoning that account
     /// wrote (`PoolRequest.carriesBoundReasoning`), or continuing a thread
     /// stored there (`PoolRequest.continuesThread`).
-    func plan(own: String, session: String?, pinned: Bool, bound: Bool = false, model: String? = nil,
+    func requestPlan(own: String, session: String?, pinned: Bool, bound: Bool, model: String?,
+                     continuing: Bool, inspectedChoice: Bool) -> (attempts: [Attempt], selection: AccountPolicyStore.Selection?) {
+        let choice = policy.selections[own]
+        guard choice == nil || inspectedChoice else { return ([], choice) }
+        return (plan(own: own, session: session, pinned: pinned, bound: bound, model: model, continuing: continuing), choice)
+    }
+
+    private func plan(own: String, session: String?, pinned: Bool, bound: Bool = false, model: String? = nil,
               continuing: Bool = false, now: Date = Date()) -> [Attempt] {
-        let asSent = [Attempt(member: own, token: nil)]
+        guard policy.readError == nil else { return [] }
+        let choice = policy.selections[own]
+        if let choice {
+            guard let sender = validatedMember(own, account: choice.profileAccount), sender.borrowsFrom != nil,
+                  validatedMember(choice.member, account: choice.memberAccount) != nil else { return [] }
+            if bound {
+                let held = session.flatMap { conversations[$0] }
+                if let held, let account = held.servedAccount {
+                    guard held.from == own, account == choice.memberAccount else { return [] }
+                    if continuing, !held.threaded, choice.member != own { return [] }
+                } else if choice.member != own {
+                    return []
+                }
+            }
+        }
+        let asSent = choice == nil || choice?.member == own ? [Attempt(member: own, token: nil)] : []
         guard let configuration, configuration.enabled, !pinned, !pausedProfiles.contains(own),
               let sender = configuration.members.first(where: { $0.id == own })
         else { return asSent }
@@ -203,7 +293,8 @@ actor PoolState {
         let accounts = candidates.map { member in
             let key = member.account ?? member.id
             var reading = limits[key]
-            if recheck == nil, PoolRequest.isFable(model), member.id == own || canLend(member),
+            if recheck == nil, choice == nil || choice?.member == member.id,
+               PoolRequest.isFable(model), member.id == own || canLend(member),
                (reading?.fableRefusedUntil ?? .distantPast) > now, PoolPolicy.hasRoom(reading, now: now),
                let requested = fableRechecks[key] {
                 switch requested {
@@ -259,6 +350,7 @@ actor PoolState {
         // refused login, a plan without the model, a limit with their own
         // reset times — is about a login Claude Code never sent.
         if ids.last != own { ids.append(own) }
+        if let choice { ids = ids.contains(choice.member) ? [choice.member] : [] }
         return ids.map { id in
             let token = id == own ? nil : candidates.first { $0.id == id }?.token
             var attempt = Attempt(member: id, token: token)
@@ -350,6 +442,7 @@ actor PoolState {
                 // A failed answer wrote no cache anywhere, so it moves nothing.
                 if (200..<300).contains(status) {
                     held.servedBy = member
+                    held.servedAccount = accountKey(member)
                     held.cacheLifetime = cacheLifetime
                     held.threaded = held.threaded || threaded
                 }
@@ -366,7 +459,14 @@ actor PoolState {
         if recent.count > 40 { recent.removeFirst(recent.count - 40) }
     }
 
-    func status(binary: String, pid: Int32, started: Date, now: Date = Date()) -> PoolStatus {
+    func status(binary: String, pid: Int32, started: Date, change: PoolAccountPolicyChange? = nil,
+                now: Date = Date()) -> PoolStatus {
+        let policyError = change.flatMap(setAccountPolicy) ?? policy.readError
+        let configuredMembers = configuration?.members ?? []
+        var selectable: [String: [String]] = [:]
+        for sender in configuredMembers where sender.borrowsFrom != nil {
+            selectable[sender.id] = selectableAccounts(for: sender, in: configuredMembers).map(\.id)
+        }
         let members = (configuration?.members ?? []).map { member in
             let state = runtime[member.id]
             return PoolMemberStatus(id: member.id, limits: limits[member.account ?? member.id],
@@ -391,6 +491,9 @@ actor PoolState {
                           enabled: configuration?.enabled ?? false,
                           configured: configuration != nil, members: members,
                           recent: recent, sessions: Array(sessions), openExchanges: clients.inFlight,
-                          activeRoutes: Array(activeRoutes.values.sorted { $0.startedAt > $1.startedAt }.prefix(64)))
+                          activeRoutes: Array(activeRoutes.values.sorted { $0.startedAt > $1.startedAt }.prefix(64)),
+                          exclusiveAccounts: policy.readError == nil ? policy.selections.mapValues(\.member) : nil,
+                          selectableAccounts: policy.readError == nil ? selectable : nil,
+                          accountPolicyError: policyError)
     }
 }

@@ -1,7 +1,30 @@
 import Foundation
 
-/// Graft keeps ownership of the already-connected profiles. This reader only needs
-/// its assigned accounts, the desktop profiles’ public account IDs and the status socket.
+enum AccountControlError: LocalizedError {
+    case unavailable, invalidAccount, unconfirmed
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable: return L10n.text("Account controls are unavailable for this connection.")
+        case .invalidAccount: return L10n.text("This account is no longer on the list for this profile.")
+        case .unconfirmed: return L10n.text("The connection could not confirm your account choice. Check the current setting and try again.")
+        }
+    }
+}
+
+extension PoolStatus {
+    func canSetAccountPolicy(for profile: String) -> Bool {
+        configured && enabled && exclusiveAccounts != nil &&
+            (members.contains { $0.id == profile } || exclusiveAccounts?[profile] != nil)
+    }
+
+    func confirmAccountPolicy(_ member: String?, for profile: String) throws {
+        guard canSetAccountPolicy(for: profile), accountPolicyError == nil,
+              exclusiveAccounts?[profile] == member else { throw AccountControlError.unconfirmed }
+    }
+}
+
+/// Graft owns this connection. A change takes effect only if its running helper acknowledges it.
 struct GraftConnection {
     static let preference = "UseExistingGraftConnection"
     static let isEnabled = UserDefaults.standard.bool(forKey: preference)
@@ -35,6 +58,26 @@ struct GraftConnection {
 
         func accounts(for profile: String) -> RoutingAccountIdentity {
             RoutingAccountIdentity(primary: profile, lenders: lenders[profile] ?? [], accountUUIDs: accountUUIDs)
+        }
+
+        func canSetRoutingMode(for profile: String) -> Bool {
+            settingsFound && profiles.contains(profile) && status?.canSetAccountPolicy(for: profile) == true
+        }
+
+        func selectableMember(_ id: String, for profile: String) -> String? {
+            let accounts = accounts(for: profile)
+            let row = accounts.canonical(id)
+            guard canSetRoutingMode(for: profile), accounts.members.contains(row) else { return nil }
+            guard let eligible = status?.selectableAccounts else { return row }
+            return eligible[profile]?.first { accounts.canonical($0) == row }
+        }
+
+        func canSelectAccount(_ id: String, for profile: String) -> Bool {
+            selectableMember(id, for: profile) != nil
+        }
+
+        func exclusiveAccount(for profile: String) -> String? {
+            status?.exclusiveAccounts?[profile].map { accounts(for: profile).canonical($0) }
         }
 
         func email(for id: String, from profile: String) -> String? {
@@ -101,6 +144,18 @@ struct GraftConnection {
         guard read().canRecheck(member, from: profile) else { return false }
         let updated = try send(PoolCommand(recheckFable: member))
         return updated.members.first(where: { $0.id == member })?.fableRecheckPending == true
+    }
+
+    func setExclusiveAccount(_ member: String?, for profile: String) throws -> Snapshot {
+        var snapshot = read()
+        guard snapshot.canSetRoutingMode(for: profile) else { throw AccountControlError.unavailable }
+        let selected = member.flatMap { snapshot.selectableMember($0, for: profile) }
+        if member != nil && selected == nil { throw AccountControlError.invalidAccount }
+        let change = PoolAccountPolicyChange(profile: profile, mode: selected == nil ? .automatic : .only, member: selected)
+        let updated = try send(PoolCommand(accountPolicy: change))
+        try updated.confirmAccountPolicy(selected, for: profile)
+        snapshot.status = updated
+        return snapshot
     }
 
     private func send(_ command: PoolCommand) throws -> PoolStatus {

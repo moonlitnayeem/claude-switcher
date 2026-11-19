@@ -13,6 +13,7 @@ struct RoutingAccountDisplay: Identifiable {
     var canRecheck = false
     var recheckPending = false
     var nickname: String? = nil
+    var canSelect = true
 }
 
 struct RoutingDisplay {
@@ -26,6 +27,13 @@ struct RoutingDisplay {
     var latestFailure: String?
     var route: RouteMapSignal?
     var externallyManaged = false
+    var exclusiveAccount: String?
+    var routingControlHint: String?
+    var savedChoiceUnreadable = false
+}
+
+extension PoolStatus {
+    var savedChoiceUnreadable: Bool { exclusiveAccounts == nil && accountPolicyError != nil }
 }
 
 struct RoutingDashboard: View {
@@ -36,6 +44,8 @@ struct RoutingDashboard: View {
     @State private var profile = UsagePoolController.mainKey
     @ObservedObject private var labels = ClaudeAccountLabels.standalone
     @State private var editingLabel: ClaudeLabelTarget?
+    @State private var changingMode = false
+    @State private var routingError: String?
 
     private var profiles: [String] {
         [UsagePoolController.mainKey] + store.shortcuts.filter { !store.isDraft($0) }.map(UsagePoolController.key)
@@ -45,9 +55,10 @@ struct RoutingDashboard: View {
         // A deleted profile falls back to the main Claude even if the dashboard stayed open.
         let key = profiles.contains(profile) ? profile : UsagePoolController.mainKey
         RoutingPanel(data: display(for: key), enabled: Binding(
-            get: { pool.automaticSwitchingEnabled(for: key) },
-            set: { pool.setAutomaticSwitching($0, for: key) }
-        ), canSwitch: UsagePoolController.isSupported, recheck: pool.recheckFable,
+            get: { pool.canSetRoutingMode(for: key) && pool.exclusiveAccount(for: key) == nil && pool.automaticSwitchingEnabled(for: key) },
+            set: { setMode($0 ? nil : key, for: key) }
+        ), canSwitch: pool.canSetRoutingMode(for: key) && !changingMode, recheck: pool.recheckFable,
+                     useOnly: { setMode($0, for: key) },
                      removeBackup: { pool.removeDisplayedBackup($0, from: key) },
                      renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) },
                      launchControls: key == UsagePoolController.mainKey ? ClaudeLaunchControls() : nil) {
@@ -73,8 +84,22 @@ struct RoutingDashboard: View {
         .sheet(item: $editingLabel) { item in
             ClaudeAccountLabelEditor(id: item.id, accountName: item.name, labels: labels)
         }
+        .alert("Couldn’t change accounts", isPresented: Binding(get: { routingError != nil },
+                                                               set: { if !$0 { routingError = nil } })) {
+            Button("OK") { routingError = nil }
+        } message: { Text(routingError ?? "") }
         .onAppear { pool.watch() }
         .onDisappear { pool.unwatch() }
+    }
+
+    private func setMode(_ account: String?, for profile: String) {
+        guard !changingMode, pool.canSetRoutingMode(for: profile) else { return }
+        changingMode = true
+        Task {
+            defer { changingMode = false }
+            do { try await pool.setExclusiveAccount(account, for: profile) }
+            catch { routingError = error.localizedDescription }
+        }
     }
 
     private func name(_ key: String) -> String {
@@ -94,6 +119,16 @@ struct RoutingDashboard: View {
         var result = RoutingDisplay(title: L10n.text(summary.0), detail: L10n.text(summary.1), ready: summary.2,
                                     accounts: rows, lastAccount: last.map { name($0.servedBy) },
                                     lastModel: last?.model.map(Self.modelName), lastAnswered: last?.at)
+        if pool.status?.savedChoiceUnreadable == true {
+            result.savedChoiceUnreadable = true
+            result.routingControlHint = L10n.text("Account controls are unavailable for this connection.")
+        } else if pool.canSetRoutingMode(for: key) {
+            if let selected = pool.exclusiveAccount(for: key) {
+                result.exclusiveAccount = rows.first { pool.sameIdentity($0.id, selected) }?.id ?? selected
+            }
+        } else {
+            result.routingControlHint = L10n.text("Connect this profile to the relay to change accounts here.")
+        }
         if let live = pool.status?.activeRoutes?.filter({ $0.from == key }).max(by: { $0.startedAt < $1.startedAt }) {
             result.route = RouteMapSignal(phase: .sending, backup: !pool.sameIdentity(live.member, key),
                                           model: live.model.map(Self.modelName), at: live.startedAt,
@@ -187,6 +222,7 @@ struct RoutingDashboard: View {
             row.recheckPending = report?.fableRecheckPending == true || pool.sendingFableRechecks.contains(id)
         }
         row.nickname = labels.nickname(for: id)
+        row.canSelect = pool.canSelectAccount(id, for: primary)
         row.state = L10n.text(row.state)
         return row
     }
@@ -227,6 +263,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     @Binding var enabled: Bool
     let canSwitch: Bool
     let recheck: (String) -> Void
+    let useOnly: (String) -> Void
     var removeBackup: ((String) -> Void)? = nil
     var renameAccount: ((String) -> Void)? = nil
     var launchControls: ClaudeLaunchControls? = nil
@@ -276,6 +313,9 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                             Spacer(minLength: 4)
                             accountActions().tint(accent)
                         }
+                        Text(data.routingControlHint ?? L10n.text("These controls apply to new Claude Code requests in this profile."))
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         VStack(spacing: 0) {
                             ForEach(Array(data.accounts.enumerated()), id: \.element.id) { index, item in
                                 if index > 0 { Divider().padding(.leading, 16) }
@@ -346,12 +386,10 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                         }
                     }.padding(.top, 2)
                 }
-                if renameAccount != nil || (!item.isPrimary && removeBackup != nil) {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 14) { rowActions(item) }
-                        VStack(alignment: .leading, spacing: 5) { rowActions(item) }
-                    }.padding(.top, 3)
-                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { rowActions(item) }
+                    VStack(alignment: .leading, spacing: 6) { rowActions(item) }
+                }.padding(.top, 4)
             }
             Spacer(minLength: 2)
             if !compact { weekly(item).padding(.top, 1) }
@@ -361,6 +399,23 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     }
 
     @ViewBuilder private func rowActions(_ item: RoutingAccountDisplay) -> some View {
+        let selected = data.exclusiveAccount == item.id
+        Button {
+            useOnly(item.id)
+        } label: {
+            HStack(spacing: 4) {
+                if selected { Image(systemName: "checkmark.circle.fill").accessibilityHidden(true) }
+                Text(selected ? "Selected account" : "Use only this account")
+            }
+        }
+        .buttonStyle(.bordered).controlSize(.small)
+        .tint(selected ? accent : nil)
+        .disabled(!canSwitch || !item.canSelect || selected)
+        .help(item.canSelect || selected ? L10n.text("Use this account for new Claude Code requests in this profile.") :
+                L10n.text("The relay cannot use this account yet. Check its sign-in."))
+        .accessibilityLabel(selected ? L10n.format("Selected account, %@", item.nickname ?? item.name)
+                                     : L10n.format("Use only %@", item.nickname ?? item.name))
+        .identified("routing.only.\(item.id)")
         if let renameAccount {
             Button("Rename label") { renameAccount(item.id) }
                 .accessibilityLabel(L10n.format("Rename label for %@", item.name))

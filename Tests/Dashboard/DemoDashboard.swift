@@ -5,7 +5,7 @@ struct DemoDashboard: View {
     var active = true
     var tryingBackup = true
     @State private var start = Date().addingTimeInterval(-0.3)
-    @State private var enabled = true
+    @State private var exclusiveAccount: String?
     @State private var queued = false
     @State private var removed = false
     @State private var editingLabel: ClaudeLabelTarget?
@@ -13,6 +13,7 @@ struct DemoDashboard: View {
 
     var body: some View {
         let hasBackup = !empty && !removed
+        let enabled = exclusiveAccount == nil
         let primary = RoutingAccountDisplay(id: "personal", name: "alex@example.com", isPrimary: true,
                                             state: L10n.text("Signed in"), weeklyUsed: empty ? nil : 96,
                                             fableReset: empty ? nil : Date(timeIntervalSince1970: 1_783_555_200),
@@ -31,9 +32,14 @@ struct DemoDashboard: View {
                 : "Turn it on to use backup accounts for Claude Code requests."),
             ready: enabled && hasBackup, accounts: hasBackup ? [primary, backup] : [primary],
             lastAccount: empty ? nil : backup.name, lastModel: empty ? nil : "Fable 5.2",
-            lastAnswered: empty ? nil : Date(timeIntervalSince1970: 1_783_348_200), route: route)
-        RoutingPanel(data: snapshot, enabled: $enabled, canSwitch: true, recheck: { _ in queued = true },
-                     removeBackup: { _ in removed = true },
+            lastAnswered: empty ? nil : Date(timeIntervalSince1970: 1_783_348_200), route: route,
+            exclusiveAccount: exclusiveAccount)
+        RoutingPanel(data: snapshot, enabled: Binding(get: { enabled }, set: { exclusiveAccount = $0 ? nil : primary.id }),
+                     canSwitch: true, recheck: { _ in queued = true }, useOnly: { exclusiveAccount = $0 },
+                     removeBackup: { id in
+                         removed = true
+                         if exclusiveAccount == id { exclusiveAccount = nil }
+                     },
                      renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: id == primary.id ? primary.name : backup.name) },
                      launchControls: ClaudeLaunchControls(openDesktop: { _ in true }, openTerminal: {})) {
             Label("Claude", systemImage: "laptopcomputer").font(.callout.weight(.medium)).foregroundStyle(.secondary)

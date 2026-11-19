@@ -1,6 +1,6 @@
 # AI Switcher
 
-AI Switcher shows which account answered a Claude Code request in Claude Desktop. You can also open ChatGPT or start a new Codex task in the OpenAI desktop app using a folder on your Mac.
+AI Switcher shows which account answered a Claude Code request in Claude Desktop. On a compatible connection, you can turn on automatic switching or pick one account to use. You can also open ChatGPT or start a new Codex task in the OpenAI desktop app using a folder on your Mac.
 
 [Download for macOS](https://github.com/moonlitnayeem/claude-switcher/releases/latest) · [All releases](https://github.com/moonlitnayeem/claude-switcher/releases) · [Report a problem](https://github.com/moonlitnayeem/claude-switcher/issues)
 
@@ -22,7 +22,10 @@ Open the DMG, drag **AI Switcher** to **Applications**, then open it. The app su
 
 1. Keep Graft running. In **AI Switcher → Settings**, turn on **Use my existing Graft setup**. This option appears when Switcher finds Graft’s saved setup.
 2. Quit and reopen **AI Switcher**. Open **Claude Desktop** in its sidebar. Your main account comes first. If Graft also lists that sign-in as a backup, AI Switcher shows it once, under **Main**. The other accounts appear under **Backup**. Graft keeps its sign-ins and its existing connection to Claude.
-3. Choose **Rename label** beside an account, type a nickname such as “Work”, then choose **Save label**. Leave the label empty to use the original name again. The nickname is saved on this Mac. To add a backup, remove one or change which account a chat uses, choose **Manage in Graft**.
+3. Look for **Automatic switching** beside the account map. On lets the connection use its normal account choices. Off uses only the main account. Under **Your accounts**, choose **Use only this account** to stay on a particular backup. This applies to new Claude Code model requests from every chat in the selected profile. If the chosen account is full or cannot handle the request, the request stops there. Turn Automatic switching back on to go back to the usual routing.
+4. Choose **Rename label** beside an account, type a nickname such as “Work”, then choose **Save label**. Leave the label empty to use the original name again. The nickname is saved on this Mac. Choose **Manage in Graft** to add or remove a backup or change a saved per-chat preference. A profile-wide account lock takes precedence over that preference.
+
+These controls require support from the helper that serves the window. Older Graft helpers still report activity. The AI Switcher installer updates its own helper only.
 
 On the main profile, choose **Open Claude Desktop** to continue in the installed app. In this setup, Graft handles each eligible Claude Code request sent through its existing connection. AI Switcher reads its status about once a second while the map is open. You can keep working in the same Claude window with the connection Graft already installed.
 
@@ -30,7 +33,7 @@ The globe slowly turns while the map is visible. A pulse along a line means Graf
 
 ## Profiles managed by AI Switcher
 
-For a profile already connected directly to AI Switcher, the **Account map** and **Recent activity** show what Switcher’s bundled relay handled. **Rename label** gives an account a nickname on this Mac. **Remove backup** takes the account out of that profile’s list and keeps its saved sign-in. **Forget a saved sign-in…** removes an unused sign-in after confirmation. Turning off **Automatic switching** keeps the saved backup list.
+For a profile already connected directly to AI Switcher, the **Account map** and **Recent activity** show what Switcher’s bundled relay handled. **Rename label** gives an account a nickname on this Mac. **Remove backup** takes the account out of that profile’s list and keeps its saved sign-in. **Forget a saved sign-in…** removes an unused sign-in after confirmation. The same **Automatic switching** and **Use only this account** controls work with the bundled helper. Your list of backups stays saved in either mode.
 
 ### Use Claude Code in Terminal
 
@@ -66,7 +69,7 @@ On macOS with the Swift toolchain, run `./build.sh`. The app is written to `buil
 | --- | --- |
 | `./test.sh` | App behavior and account selection rules |
 | `./test-relay.sh` | Requests through a local relay with test accounts |
-| `./test-graft-connection.sh` | Reading an existing Graft setup and queuing a Fable recheck |
+| `./test-graft-connection.sh` | Existing Graft setup, confirmed account controls and scoped Fable rechecks |
 | `./test-openai.sh` | Desktop launch and project actions, named profiles and isolated Terminal sessions |
 | `./test-layout.sh` | English and Russian windows and accessibility controls |
 

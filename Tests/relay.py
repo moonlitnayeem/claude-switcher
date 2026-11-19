@@ -317,6 +317,114 @@ response, _, went = ask(conn, home_token, session=None)
 check(response.status == 429 and [w["token"] for w in went] == [home_token],
       "two profiles presenting the same login cannot borrow on one another's behalf")
 
+# Exclusive routing only narrows the relay's existing permissions and plans.
+strict_profile, strict_backup, other_profile = "desk", "backup", "other-desk"
+strict_tokens = ["tok-desk", "tok-backup", "tok-other"]
+for token in strict_tokens:
+    accounts[token] = {"7d": 0.1, "7d-reset": now + 6 * 86400, "reject": False}
+strict_members = [
+    member(strict_profile, strict_tokens[0], borrows=[strict_backup], account="owner-id"),
+    member(strict_backup, strict_tokens[1], account="backup-id"),
+    member(other_profile, strict_tokens[2], borrows=[], account="other-id")]
+def configure_strict(members=strict_members):
+    return control({"configure": {"enabled": True, "members": members}}, production_order=True)
+def choose(profile, member_id=None):
+    choice = {"profile": profile, "mode": "automatic" if member_id is None else "only"}
+    if member_id is not None: choice["member"] = member_id
+    return control({"accountPolicy": choice})
+def strict_request(expected_status, expected_tokens, message, sender=strict_tokens[0], **kwargs):
+    client = connection()
+    try:
+        response, _, went = ask(client, sender, **kwargs)
+        check(response.status == expected_status and [w["token"] for w in went] == expected_tokens, message)
+    finally:
+        client.close()
+
+strict_status = configure_strict()
+check(strict_status.get("exclusiveAccounts") == {}, "the relay advertises account-choice support")
+check(strict_status.get("selectableAccounts") == {strict_profile: [strict_profile, strict_backup], other_profile: [other_profile]},
+      "read-only controls expose exactly the eligible accounts on each profile")
+check(choose(strict_profile, strict_profile).get("exclusiveAccounts") == {strict_profile: strict_profile},
+      "the main account can be locked for a single profile")
+accounts[strict_tokens[0]]["reject"] = True
+strict_request(429, strict_tokens[:1], "the pinned main account can refuse without touching a backup")
+accounts[strict_tokens[0]]["reject"] = False
+control({"pausedProfiles": [strict_profile]})
+check(choose(strict_profile, strict_backup).get("exclusiveAccounts") == {strict_profile: strict_backup},
+      "a granted backup can be selected before an old profile pause is lifted")
+strict_request(409, [], "a paused profile cannot start using a backup through a saved choice")
+control({"pausedProfiles": []})
+strict_request(200, strict_tokens[1:2], "a selected backup answers an ordinary request", session="backup-owned")
+strict_request(200, strict_tokens[2:], "a different recognized profile keeps its own routing", sender=strict_tokens[2])
+strict_request(409, [], "a backup lock declines sender-owned files locally", body=b'{"file_id":"file_123"}')
+strict_request(409, [], "a formatted JSON account-owned container stays with its sender",
+               body=b'{ "container": { "other": 1, "id" : "container_123" } }')
+strict_request(409, [], "an exclusive backup cannot handle a continuation hidden by key order",
+               body=b'{ "thread": { "previous_message_id":"desktop-message", "type": "continue" } }', session="unseen")
+continuation = b'{"thread":{"type":"continue","previous_message_id":"desktop-message"}}'
+strict_request(409, [], "a saved choice cannot move a thread with an unknown owner",
+               body=continuation, session="unseen")
+choose(strict_profile, strict_profile)
+strict_request(409, [], "a main-only choice cannot move a known backup-owned conversation",
+               body=continuation, session="backup-owned")
+choose(strict_profile, strict_backup)
+for profile, selected in [(strict_profile, other_profile), (strict_backup, strict_backup), ("missing", strict_backup)]:
+    status = choose(profile, selected)
+    check(bool(status.get("accountPolicyError")) and status.get("exclusiveAccounts") == {strict_profile: strict_backup},
+          "an invalid profile or unassigned account cannot replace a valid choice")
+control({"allowedLenders": {strict_profile: []}})
+strict_request(409, [], "revoking a selected backup closes its route without trying the main account")
+configure_strict([strict_members[0], dict(strict_members[1], account="replacement-owner"), strict_members[2]])
+strict_request(409, [], "a reused member ID cannot send requests to a different account")
+configure_strict(strict_members[:1] + strict_members[2:])
+strict_request(409, [], "removing the selected backup does not spend the main account's allowance")
+configure_strict()
+accounts[strict_tokens[1]]["refuse"] = 401
+strict_request(401, strict_tokens[1:2], "a refused backup login returns its error without a fallback")
+strict_request(409, [], "a known refused backup login is not tried again")
+check(control({})["selectableAccounts"][strict_profile] == [strict_profile],
+      "a refused account is absent from the choices the relay can accept")
+accounts[strict_tokens[1]].pop("refuse")
+policy_path = os.path.join(pool, "account-policy.json")
+with open(policy_path) as f:
+    saved = json.load(f)
+check(saved == {strict_profile: {"member": strict_backup, "memberAccount": "backup-id", "profileAccount": "owner-id"}},
+      "only member and account ids are persisted")
+os.rename(policy_path, policy_path + ".test-saved")
+os.mkdir(policy_path)
+try:
+    status = choose(strict_profile)
+    check(bool(status.get("accountPolicyError")) and status.get("exclusiveAccounts") == {strict_profile: strict_backup},
+          "a failed policy write leaves the prior restriction in force")
+finally:
+    os.rmdir(policy_path)
+    os.rename(policy_path + ".test-saved", policy_path)
+check(choose(strict_profile).get("exclusiveAccounts") == {}, "automatic clears just the selected profile's choice")
+strict_request(200, strict_tokens[:1], "automatic can use the main account after the backup-only choice is cleared")
+choose(other_profile, other_profile)
+choose(strict_profile, strict_profile)
+check(choose(strict_profile)["exclusiveAccounts"] == {other_profile: other_profile},
+      "returning one profile to automatic preserves another profile's restriction")
+choose(other_profile)
+
+race_main, race_backup = "tok-policy-race-home", "tok-policy-race-backup"
+entered, finish = threading.Event(), threading.Event()
+accounts[race_main] = {"7d": 0.1, "7d-reset": now + 86400, "reject": True, "gate": ("policy-race", entered, finish)}
+accounts[race_backup] = {"7d": 0.1, "7d-reset": now + 86400, "reject": False}
+configure_strict([member("race-home", race_main, borrows=["race-backup"], account="race-owner"),
+                  member("race-backup", race_backup, account="race-lender")])
+pending = threading.Thread(target=strict_request, args=(409, [race_main],
+    "an in-flight automatic retry respects a restriction saved before its next attempt"),
+    kwargs={"session": "policy-race", "sender": race_main})
+pending.start()
+try:
+    check(entered.wait(5), "the first ordinary request started before the account selection changed")
+    choose("race-home", "race-home")
+finally:
+    finish.set()
+pending.join(10)
+choose("race-home")
+
 # Fable may run out on a lender whose other models still have room.
 fable_model = "claude-fable-5-2"
 def check_model_route(model, expected, message, sender="tok-scope-home"):
@@ -921,11 +1029,48 @@ except subprocess.TimeoutExpired:
     relay.kill()
 check(relay.returncode == 0, "the retired relay leaves once its final upgraded connection finishes")
 conn.close()
+configure_strict()
+choose(strict_profile, strict_backup)
 control({"quit": True})
 try:
     replacement.wait(timeout=10)
 except subprocess.TimeoutExpired:
     replacement.kill()
+
+# The relay reads restrictions before exposing its socket or accepting requests.
+def policy_restart():
+    proc = subprocess.Popen(args, cwd=work, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(100):
+        if os.path.exists(socket_path): break
+        time.sleep(0.05)
+    return proc
+
+def stop_fixture(proc):
+    try:
+        control({"quit": True})
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None: proc.kill(); proc.wait()
+
+restored = policy_restart()
+try:
+    check(control({}).get("exclusiveAccounts") == {strict_profile: strict_backup}, "the choice survives relay replacement")
+    strict_request(409, [], "a restart cannot pass inference through before account identities return")
+    configure_strict()
+    strict_request(200, strict_tokens[1:2], "the saved choice resumes when membership is restored")
+    choose(strict_profile)
+finally:
+    stop_fixture(restored)
+with open(policy_path, "w") as broken: broken.write("invalid data")
+damaged = policy_restart()
+try:
+    status = configure_strict()
+    check("exclusiveAccounts" not in status and bool(status.get("accountPolicyError")),
+          "a broken policy file never reports automatic switching")
+    strict_request(409, [], "a policy read error blocks inference")
+    check(bool(choose(strict_profile).get("accountPolicyError")), "a saved choice that failed to load is never overwritten")
+finally:
+    stop_fixture(damaged)
 
 # A relay whose Graft has been removed, and the folder Graft kept with it, as
 # `brew uninstall --zap` leaves things: one borrowing Claude closed and one

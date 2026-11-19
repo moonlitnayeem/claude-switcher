@@ -700,3 +700,26 @@
 
 "More" = "Ещё";
 "Claude Code uses Graft for this connection" = "Claude Code использует Graft для этого подключения";
+
+"Couldn’t change accounts" = "Не удалось сменить аккаунт";
+"Use this account for new Claude Code requests in this profile." = "Использовать этот аккаунт для новых запросов Claude Code в этом профиле.";
+"The relay cannot use this account yet. Check its sign-in." = "Этот аккаунт пока недоступен для запросов. Проверьте, выполнен ли вход.";
+"Account choice unavailable" = "Выбор аккаунта недоступен";
+"Requests are paused because the relay could not read your saved account choice." = "Запросы приостановлены, так как сервис не смог прочитать сохранённый выбор аккаунта.";
+"Selected account is unavailable" = "Выбранный аккаунт недоступен";
+"Choose another account below or turn on automatic switching to send requests again." = "Выберите другой аккаунт ниже или включите автоматическое переключение, чтобы возобновить запросы.";
+"Connect this profile to the relay to change accounts here." = "Чтобы выбирать аккаунт здесь, подключите этот профиль к сервису маршрутизации.";
+"These controls apply to new Claude Code requests in this profile." = "Эти настройки действуют для новых запросов Claude Code в этом профиле.";
+"Selected account" = "Выбранный аккаунт";
+"Use only this account" = "Только этот аккаунт";
+"Selected account, %@" = "Выбранный аккаунт, %@";
+"Use only %@" = "Использовать только %@";
+"Using one account" = "Выбран один аккаунт";
+"Requests go only to %@, even if it is full. Turn on automatic switching to use backups." = "Все запросы идут в %@, даже если лимит исчерпан. Включите автоматическое переключение, чтобы использовать запасные аккаунты.";
+"Turn on to use backups. Turn off to use only your main account." = "Включите, чтобы использовать запасные аккаунты. Выключите, чтобы использовать только основной аккаунт.";
+"Open Graft to change which account answers." = "Откройте Graft, чтобы выбрать аккаунт для запросов.";
+"Connect this profile in Graft to change accounts here." = "Чтобы выбирать аккаунт здесь, подключите профиль в Graft.";
+"Your version of Graft can show activity but can’t change accounts here." = "Ваша версия Graft показывает историю запросов, но не поддерживает выбор аккаунта здесь.";
+"Account controls are unavailable for this connection." = "В этом подключении выбор аккаунта недоступен.";
+"This account is no longer on the list for this profile." = "Этого аккаунта больше нет в списке аккаунтов профиля.";
+"The connection could not confirm your account choice. Check the current setting and try again." = "Сервис не подтвердил выбор аккаунта. Проверьте текущую настройку и попробуйте снова.";

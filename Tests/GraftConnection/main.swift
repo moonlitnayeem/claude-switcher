@@ -35,6 +35,32 @@ let accepted = try connection.recheck("backup", from: "main")
 precondition(accepted)
 print("Graft setup, reported backup answer and scoped reset checks passed")
 
+precondition(!snapshot.canSetRoutingMode(for: "main"))
+do {
+    _ = try connection.setExclusiveAccount("main", for: "main")
+    preconditionFailure("A helper without account controls accepted a change")
+} catch AccountControlError.unavailable {}
+let restricted = try connection.setExclusiveAccount("backup", for: "main")
+precondition(restricted.exclusiveAccount(for: "main") == "backup")
+precondition(restricted.canSelectAccount("main", for: "main") && restricted.canSelectAccount("backup", for: "main"))
+precondition(!restricted.canSelectAccount("foreign", for: "main"))
+let reread = connection.read()
+precondition(reread.canSetRoutingMode(for: "main") && reread.exclusiveAccount(for: "main") == "backup")
+do {
+    _ = try connection.setExclusiveAccount("foreign", for: "main")
+    preconditionFailure("A row outside the profile's account list was accepted")
+} catch AccountControlError.invalidAccount {}
+let primaryOnly = try connection.setExclusiveAccount("main-alias", for: "main")
+precondition(primaryOnly.exclusiveAccount(for: "main") == "main")
+do {
+    _ = try connection.setExclusiveAccount(nil, for: "main")
+    preconditionFailure("An ignored command was shown as applied")
+} catch AccountControlError.unconfirmed {}
+let automatic = try connection.setExclusiveAccount(nil, for: "main")
+precondition(automatic.exclusiveAccount(for: "main") == nil && automatic.canSetRoutingMode(for: "main"))
+precondition(automatic.accounts(for: "main").members == main.members)
+print("Account controls require a compatible helper, a configured account and the requested mode in its reply")
+
 let disconnected = GraftConnection(root: root.appending(path: "absent"))
 precondition(disconnected.read().status == nil && !disconnected.read().settingsFound)
 precondition(!FileManager.default.fileExists(atPath: disconnected.root.path))

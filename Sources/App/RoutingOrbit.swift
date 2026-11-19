@@ -22,9 +22,20 @@ struct RoutingOrbitCard: View {
     let canSwitch: Bool
     let compact: Bool
 
-    private var signal: RouteMapSignal? { enabled ? data.route : nil }
+    private var signal: RouteMapSignal? { data.route }
 
     private var status: (title: String, detail: String) {
+        if data.savedChoiceUnreadable {
+            return (L10n.text("Account choice unavailable"), L10n.text("Requests are paused because the relay could not read your saved account choice."))
+        }
+        if let id = data.exclusiveAccount {
+            guard let account = data.accounts.first(where: { $0.id == id }) else {
+                return (L10n.text("Selected account is unavailable"),
+                        L10n.text("Choose another account below or turn on automatic switching to send requests again."))
+            }
+            return (L10n.text("Using one account"),
+                    L10n.format("Requests go only to %@, even if it is full. Turn on automatic switching to use backups.", account.nickname ?? account.name))
+        }
         if let live = signal, live.phase == .sending {
             if live.backup, live.mainLimited {
                 return (L10n.text("Trying your backup"), live.model.map { L10n.format("Your main account reached its limit. The backup is trying %@.", $0) }
@@ -58,19 +69,13 @@ struct RoutingOrbitCard: View {
                     .foregroundStyle(OrbitInk.aqua).accessibilityHidden(true)
                 Text("Account map").font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 2)
-                if data.externallyManaged {
-                    Label(enabled ? "Switching on" : "Switching off", systemImage: enabled ? "checkmark.circle.fill" : "pause.circle")
-                        .font(.caption.weight(.semibold)).foregroundStyle(enabled ? OrbitInk.aqua : OrbitInk.quiet)
-                        .identified("routing.managed-status")
-                } else {
-                    Text("Automatic switching").font(.callout.weight(.medium)).foregroundStyle(.white.opacity(0.86))
-                        .accessibilityHidden(true)
-                    Toggle("Automatic switching", isOn: $enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                        .tint(Color(red: 0.15, green: 0.62, blue: 0.53))
-                        .environment(\.colorScheme, .dark).disabled(!canSwitch)
-                        .accessibilityLabel("Automatic switching").identified("routing.automatic")
-                        .help("Let a backup answer when your main account runs out.")
-                }
+                Toggle("Automatic switching", isOn: $enabled)
+                    .font(.callout.weight(.semibold))
+                    .toggleStyle(.switch).controlSize(.regular).fixedSize()
+                    .tint(Color(red: 0.15, green: 0.62, blue: 0.53))
+                    .environment(\.colorScheme, .dark).disabled(!canSwitch)
+                    .accessibilityLabel("Automatic switching").identified("routing.automatic")
+                    .help("Turn on to use backups. Turn off to use only your main account.")
             }.padding(.horizontal, compact ? 15 : 20).padding(.vertical, 12)
             Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
             OrbitMap(signal: signal, hasBackup: data.accounts.count > 1)

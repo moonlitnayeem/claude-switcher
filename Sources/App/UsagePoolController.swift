@@ -360,6 +360,71 @@ final class UsagePoolController: ObservableObject {
         aliases(of: profile).allSatisfy { sharing.automaticSwitchingEnabled(for: $0) }
     }
 
+    // Two shortcuts may open the same profile. Only one sender appears in the relay's configuration.
+    private func policySender(for profile: String) -> String? {
+        let candidates = [profile] + aliases(of: profile).filter { $0 != profile }
+        return candidates.first { status?.canSetAccountPolicy(for: $0) == true }
+    }
+
+    func canSetRoutingMode(for profile: String) -> Bool {
+        policySender(for: profile) != nil
+    }
+
+    private func selectableMember(_ id: String, for profile: String) -> String? {
+        guard let sender = policySender(for: profile), id == profile || members(of: profile).contains(id) else { return nil }
+        let requested = id == profile ? sender : id
+        guard let eligible = status?.selectableAccounts else { return requested }
+        return eligible[sender]?.first { sameIdentity($0, requested) }
+    }
+
+    func canSelectAccount(_ id: String, for profile: String) -> Bool {
+        selectableMember(id, for: profile) != nil
+    }
+
+    func exclusiveAccount(for profile: String) -> String? {
+        if let sender = policySender(for: profile), let selected = status?.exclusiveAccounts?[sender] {
+            if selected == sender { return profile }
+            return members(of: profile).first { sameIdentity($0, selected) } ?? selected
+        }
+        return automaticSwitchingEnabled(for: profile) ? nil : profile
+    }
+
+    @MainActor
+    func setExclusiveAccount(_ member: String?, for profile: String) async throws {
+        guard let sender = policySender(for: profile) else { throw AccountControlError.unavailable }
+        let selected = member.flatMap { selectableMember($0, for: profile) }
+        if member != nil && selected == nil { throw AccountControlError.invalidAccount }
+        let change = PoolAccountPolicyChange(profile: sender, mode: selected == nil ? .automatic : .only, member: selected)
+        try await applyAccountCommand(PoolCommand(accountPolicy: change), member: selected, sender: sender)
+
+        // Older versions saved Off as a separate main-only rule. Keep that restriction
+        // until the new policy is installed, then have the relay acknowledge its removal.
+        if !automaticSwitchingEnabled(for: profile) {
+            var next = sharing
+            for key in aliases(of: profile) { next.setAutomaticSwitching(true, for: key) }
+            guard persist(next) else { throw AccountControlError.unconfirmed }
+            let paused = Set(claudes.filter { !automaticSwitchingEnabled(for: $0) })
+            defer { sync() }
+            try await applyAccountCommand(PoolCommand(pausedProfiles: paused), member: selected, sender: sender)
+        }
+    }
+
+    @MainActor
+    private func applyAccountCommand(_ command: PoolCommand, member: String?, sender: String) async throws {
+        // The same queue handles polls and configuration. Publish in that order so an
+        // older read cannot replace the setting just confirmed by the relay.
+        status = try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                let result = Result {
+                    let reply = try PoolSocket.send(command)
+                    try reply.confirmAccountPolicy(member, for: sender)
+                    return reply
+                }
+                DispatchQueue.main.async { continuation.resume(with: result) }
+            }
+        }
+    }
+
     func setAutomaticSwitching(_ enabled: Bool, for profile: String) {
         guard claudes.contains(profile), automaticSwitchingEnabled(for: profile) != enabled else { return }
         var next = sharing

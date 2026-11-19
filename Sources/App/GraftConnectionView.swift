@@ -11,13 +11,19 @@ struct GraftConnectionView: View {
     @State private var profile = "main"
     @State private var message: String?
     @State private var rechecking = false
+    @State private var changingMode = false
+    @State private var modeRevision = 0
 
     var body: some View {
         let key = snapshot.profiles.contains(profile) ? profile : "main"
         let status = snapshot.status
-        let enabled = status?.configured == true && status?.enabled == true && snapshot.accounts(for: key).members.count > 1
-        RoutingPanel(data: display(profile: key), enabled: .constant(enabled), canSwitch: false,
+        let connected = status?.configured == true && status?.enabled == true
+        let canSet = snapshot.canSetRoutingMode(for: key)
+        let enabled = canSet && snapshot.exclusiveAccount(for: key) == nil
+        RoutingPanel(data: display(profile: key), enabled: Binding(get: { enabled },
+                     set: { setMode($0 ? nil : key, for: key) }), canSwitch: canSet && !changingMode,
                      recheck: { member in recheck(member, profile: key) },
+                     useOnly: { setMode($0, for: key) },
                      renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) },
                      launchControls: key == "main" ? ClaudeLaunchControls() : nil) {
             if snapshot.profiles.count > 1 {
@@ -29,14 +35,17 @@ struct GraftConnectionView: View {
             Button("Manage in Graft") { openGraft() }.identified("routing.manage-graft")
         } manage: {
             Label("Connected through Graft", systemImage: "link")
-                .foregroundStyle(.secondary).opacity(enabled ? 1 : 0)
+                .foregroundStyle(.secondary).opacity(connected ? 1 : 0)
         }
         .task {
             while !Task.isCancelled {
+                let revision = modeRevision
                 let next = await Task.detached(priority: .utility) { connection.read() }.value
                 guard !Task.isCancelled else { return }
-                snapshot = next
-                loaded = true
+                if revision == modeRevision && !changingMode {
+                    snapshot = next
+                    loaded = true
+                }
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
             }
         }
@@ -83,6 +92,7 @@ struct GraftConnectionView: View {
             var row = RoutingAccountDisplay(id: id, name: name, isPrimary: id == profile,
                                             state: L10n.text(state), weeklyUsed: week)
             row.nickname = labels.nickname(for: id)
+            row.canSelect = snapshot.canSelectAccount(id, for: profile)
             row.needsAttention = report?.tokenRefused == true || week == 100
             if let reset = limits?.fableRefusedUntil, reset > now { row.fableReset = reset }
             row.canRecheck = !rechecking && snapshot.canRecheck(id, from: profile)
@@ -124,6 +134,18 @@ struct GraftConnectionView: View {
                                   accounts: rows, lastAccount: success.map { accountName(accounts.canonical($0.servedBy), profile: profile) },
                                   lastModel: success?.model.map(RoutingDashboard.modelName), lastAnswered: success?.at)
         data.externallyManaged = true
+        if status?.savedChoiceUnreadable == true {
+            data.savedChoiceUnreadable = true
+            data.routingControlHint = L10n.text("Account controls are unavailable for this connection.")
+        } else if snapshot.canSetRoutingMode(for: profile) {
+            data.exclusiveAccount = snapshot.exclusiveAccount(for: profile)
+        } else if status == nil {
+            data.routingControlHint = L10n.text("Open Graft to change which account answers.")
+        } else if !snapshot.settingsFound || status?.configured != true || status?.enabled != true || status?.exclusiveAccounts != nil {
+            data.routingControlHint = L10n.text("Connect this profile in Graft to change accounts here.")
+        } else {
+            data.routingControlHint = L10n.text("Your version of Graft can show activity but can’t change accounts here.")
+        }
         if let last = history.last {
             let ok = (200..<300).contains(last.status)
             data.route = RouteMapSignal(phase: ok ? .answered : .failed, backup: accounts.canonical(last.servedBy) != profile,
@@ -131,6 +153,27 @@ struct GraftConnectionView: View {
             if !ok { data.latestFailure = L10n.format("Request returned HTTP %ld", last.status) }
         }
         return data
+    }
+
+    private func setMode(_ account: String?, for profile: String) {
+        guard !changingMode, snapshot.canSetRoutingMode(for: profile) else { return }
+        changingMode = true
+        modeRevision += 1
+        Task {
+            defer {
+                modeRevision += 1
+                changingMode = false
+            }
+            do {
+                snapshot = try await Task.detached(priority: .userInitiated) {
+                    try connection.setExclusiveAccount(account, for: profile)
+                }.value
+            } catch {
+                let reason = error.localizedDescription
+                snapshot = await Task.detached(priority: .utility) { connection.read() }.value
+                message = reason
+            }
+        }
     }
 
     private func recheck(_ member: String, profile: String) {

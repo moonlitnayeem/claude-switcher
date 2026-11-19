@@ -1,4 +1,4 @@
-"""Stand-in for Graft's documented per-user status socket; accepts a status read and one scoped action."""
+"""Stand-in for Graft's documented per-user status socket; accepts a status read and scoped changes for an assigned profile."""
 import json
 from pathlib import Path
 import socket
@@ -34,11 +34,26 @@ with socket.socket(socket.AF_UNIX) as server:
     server.bind(str(pool / 'relay.sock'))
     server.listen(1)
     server.settimeout(10)
-    for expected in [{}, {}, {}, {'recheckFable': 'backup'}]:
+    def policy(member):
+        value = {'profile': 'main', 'mode': 'only' if member else 'automatic'}
+        if member:
+            value['member'] = member
+        return {'accountPolicy': value}
+
+    # Start with an old helper. Then acknowledge each click except one deliberate failed clear.
+    steps = [{}, {}, {}, {'recheckFable': 'backup'}, {},
+             {}, policy(profile), {}, {}, {}, policy('main'), {}, policy(None), {}, policy(None)]
+    for index, expected in enumerate(steps):
+        if index == 5:
+            status['exclusiveAccounts'] = {}
+            status['selectableAccounts'] = {'main': ['main', profile]}
         client, _ = server.accept()
         with client, client.makefile('rb') as reader:
             incoming = json.loads(reader.readline())
             assert incoming == expected, 'unexpected command'
             if 'recheckFable' in incoming:
                 members[1]['fableRecheckPending'] = True
+            if 'accountPolicy' in incoming and index != 12:
+                chosen = incoming['accountPolicy'].get('member')
+                status['exclusiveAccounts'] = {'main': chosen} if chosen else {}
             client.sendall(json.dumps(status).encode() + b'\n')

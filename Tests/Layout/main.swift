@@ -90,12 +90,12 @@ func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.3)) }
 /// its description, or its title when it has none. The run loop keeps turning
 /// while the reader works, because every question it asks is answered here, on
 /// the main thread, and waiting on it would leave nobody to answer.
-func readFromOutside(_ window: NSWindow, toggleRoutingFixture: Bool = false) -> [String: String] {
+func readFromOutside(_ window: NSWindow, pressRoutingFixture control: String? = nil) -> [String: String] {
     guard let reader = Bundle.main.url(forResource: "outside-reader", withExtension: nil) else { return [:] }
     let process = Process()
     let pipe = Pipe()
     process.executableURL = reader
-    process.arguments = [String(getpid()), window.title] + (toggleRoutingFixture ? ["--toggle-routing-fixture"] : [])
+    process.arguments = [String(getpid()), window.title] + (control.map { ["--press-routing-fixture", $0] } ?? [])
     process.standardOutput = pipe
     guard (try? process.run()) != nil else { return [:] }
     let deadline = Date().addingTimeInterval(20)
@@ -118,6 +118,7 @@ func readFromOutside(_ window: NSWindow, toggleRoutingFixture: Bool = false) -> 
 struct Seen {
     var role = "", subrole = "", label = "", title = "", titledBy = "", value = "", identifier = ""
     var frame = CGRect.zero
+    var enabled = true
     /// What VoiceOver says the element is. A control in a grouped form has
     /// none of its own: AppKit links it to the label drawn beside it instead,
     /// and VoiceOver reads that.
@@ -174,7 +175,7 @@ func seen(_ window: NSWindow) -> [Seen]? {
                             titledBy: titledBy,
                             value: described.isEmpty ? text(element, kAXValueAttribute) : described,
                             identifier: text(element, "AXIdentifier"),
-                            frame: frame(element))
+                            frame: frame(element), enabled: (attribute(element, kAXEnabledAttribute) as? Bool) ?? true)
             return [here] + ((attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []).flatMap(walk)
         }
         let windows = (attribute(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []
@@ -473,20 +474,34 @@ for page in pages {
                     if state == "current" && appearance == .aqua {
                         let id = "window.routing.automatic"
                         let initial = element(id, in: tree)?.value
-                        _ = readFromOutside(window, toggleRoutingFixture: true)
+                        let backup = "window.routing.only.studio"
+                        let main = "window.routing.only.personal"
+                        _ = readFromOutside(window, pressRoutingFixture: backup)
                         settle()
-                        let changed = seen(window).flatMap { element(id, in: $0) }?.value
+                        let exclusive = seen(window) ?? []
+                        let changed = element(id, in: exclusive)?.value
                         check(initial != nil && changed != nil && initial != changed,
-                              "\(place): pressing the switch changes the fixture's routing state")
-                        _ = readFromOutside(window, toggleRoutingFixture: true)
+                              "\(place): selecting the backup turns off automatic switching")
+                        check(element(backup, in: exclusive)?.name == L10n.format("Selected account, %@", "studio@example.org")
+                              && element(main, in: exclusive)?.enabled == true,
+                              "\(place): the selected backup is identified and the main remains available")
+                        _ = readFromOutside(window, pressRoutingFixture: id)
                         settle()
                         check(seen(window).flatMap { element(id, in: $0) }?.value == initial,
-                              "\(place): pressing again restores the fixture's routing state")
+                              "\(place): turning automatic switching on clears the backup choice")
+                        _ = readFromOutside(window, pressRoutingFixture: id)
+                        settle()
+                        check(seen(window).flatMap { element(main, in: $0) }?.name == L10n.format("Selected account, %@", "alex@example.com"),
+                              "\(place): turning automatic switching off selects the main account")
+                        _ = readFromOutside(window, pressRoutingFixture: id)
+                        settle()
                     }
                     check(tree.contains { $0.name == L10n.text("Account map")
                             && $0.value == L10n.text("Sending to your backup") },
                           "\(place): the account map announces the current route")
                     for (id, title) in [
+                        ("only.personal", L10n.format("Use only %@", "alex@example.com")),
+                        ("only.studio", L10n.format("Use only %@", "studio@example.org")),
                         ("rename.personal", L10n.format("Rename label for %@", "alex@example.com")),
                         ("rename.studio", L10n.format("Rename label for %@", "studio@example.org")),
                         ("remove.studio", L10n.format("Remove %@ as a backup", "studio@example.org")),
@@ -734,6 +749,20 @@ do {
     compact.orderOut(nil)
 }
 
+for unreadable in [false, true] {
+    var data = RoutingDisplay(title: "Automatic", detail: "", accounts: [])
+    data.exclusiveAccount = unreadable ? nil : "removed-fixture-account"
+    data.savedChoiceUnreadable = unreadable
+    let card = hosted(RoutingOrbitCard(data: data, enabled: .constant(false), canSwitch: !unreadable, compact: false)
+        .frame(width: 600, height: 420).environment(\.controlSurface, ControlSurface.window), title: "Unavailable selection fixture")
+    let tree = checkAccessibility(card, surface: ControlSurface.window, "unavailable account choice")
+    let title = L10n.text(unreadable ? "Account choice unavailable" : "Selected account is unavailable")
+    check(tree.contains { [$0.name, $0.value].contains(title) }, "a missing account or unreadable choice explains why requests stopped")
+    check(element("window.routing.automatic", in: tree)?.enabled == !unreadable,
+          "automatic switching can clear a missing account, but requires a readable setting")
+    card.orderOut(nil)
+}
+
 // Saved assignments stay visible before the fixture's relay starts.
 let savedGraft = temporary.appending(path: Graft.legacyFolderName)
 try fm.createDirectory(at: savedGraft, withIntermediateDirectories: true)
@@ -744,9 +773,10 @@ do {
     let tree = checkAccessibility(managed, surface: ControlSurface.window, "existing Graft connection")
     check(element("window.routing.manage-graft", in: tree)?.name == L10n.text("Manage in Graft"),
           "the existing connection offers its own account manager")
-    check(element("window.routing.managed-status", in: tree) != nil
-            && element("window.routing.automatic", in: tree) == nil,
-          "the existing connection displays Graft's switching status without a second switch")
+    check(element("window.routing.automatic", in: tree)?.enabled == false
+            && element("window.routing.only.main", in: tree)?.enabled == false
+            && element("window.routing.only.studio", in: tree)?.enabled == false,
+          "the existing connection displays controls but cannot change accounts while disconnected")
     check(tree.contains { [$0.name, $0.value].contains(L10n.text("Waiting for Graft")) },
           "an unavailable Graft relay is shown as disconnected")
     check(element("window.routing.rename.main", in: tree)?.role == kAXButtonRole

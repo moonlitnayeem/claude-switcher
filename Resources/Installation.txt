@@ -7,7 +7,10 @@ Already using Graft?
 Keep Graft running. In AI Switcher’s Settings, turn on “Use my existing Graft
 setup”, then quit and reopen AI Switcher. Choose Claude Desktop to see which
 account answered in Claude Code. Give the accounts nicknames in AI Switcher.
-Use “Manage in Graft” to add a backup or change where a chat goes.
+A compatible helper shows “Automatic switching” by the account map.
+Turn it off for the main account only, or choose “Use only this account”
+beside a backup. Turning it on again restores the usual routing.
+Use “Manage in Graft” to add or remove a backup.
 Claude keeps using its saved connection.
 
 New to AI Switcher?

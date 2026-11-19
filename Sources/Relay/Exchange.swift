@@ -80,9 +80,9 @@ final class Exchange {
             try await client.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8))
         }
 
-        var own: String?
+        var sender: (id: String, restricted: Bool)?
         if let bearer = PoolRequest.bearer(in: head.pairs) {
-            own = await state.member(for: bearer)
+            sender = await state.member(for: bearer)
         }
         // Only a model request from a Claude the pool knows can change
         // accounts, so only that one is ever taken apart. Remote Control's own
@@ -90,10 +90,19 @@ final class Exchange {
         // it belongs to the account that sent it, and rebuilding a request
         // drops `Upgrade` as a hop's field, which is all it takes to stop a
         // socket opening.
-        guard PoolRequest.isInference(method: head.method, target: head.target), let own,
-              !head.asksToUpgrade else {
+        guard PoolRequest.isInference(method: head.method, target: head.target) else {
             return try await passThrough(head, raw: raw, framing: framing)
         }
+        func decline() async throws -> Bool {
+            try await client.send(HTTPMessage.failure(409, "Conflict",
+                "The relay cannot use the selected account for this request. Check the account choice in AI Switcher."))
+            return false
+        }
+        guard let sender, !head.asksToUpgrade else {
+            if await state.policyBlocksPassThrough(for: sender?.id) { return try await decline() }
+            return try await passThrough(head, raw: raw, framing: framing)
+        }
+        let own = sender.id
         let body: Data
         do {
             body = try await client.readBody(framing, limit: Self.bodyLimit)
@@ -104,12 +113,15 @@ final class Exchange {
 
         let session = head.value("x-claude-code-session-id")
         let model = PoolRequest.model(in: body)
-        let pinned = PoolRequest.mustStayWithSender(body: body,
-                                                    contentEncoding: head.value("content-encoding"))
-        let continuing = PoolRequest.continuesThread(body: body)
-        let attempts = await state.plan(own: own, session: session, pinned: pinned,
-                                        bound: continuing || PoolRequest.carriesBoundReasoning(body: body, model: model),
-                                        model: model, continuing: continuing)
+        let encoding = head.value("content-encoding")
+        let binding = sender.restricted ? PoolRequest.accountBinding(body: body, contentEncoding: encoding, model: model) : nil
+        let pinned = binding?.senderOnly == true || PoolRequest.mustStayWithSender(body: body, contentEncoding: encoding)
+        let continuing = binding?.continuing == true || PoolRequest.continuesThread(body: body)
+        let bound = binding?.bound == true || continuing || PoolRequest.carriesBoundReasoning(body: body, model: model)
+        let threaded = binding?.threaded == true || PoolRequest.carriesThread(body: body)
+        let (attempts, selection) = await state.requestPlan(own: own, session: session, pinned: pinned,
+                                          bound: bound, model: model, continuing: continuing, inspectedChoice: binding != nil)
+        guard !attempts.isEmpty else { return try await decline() }
 
         // A connection can carry successive requests, and several profiles can stream concurrently.
         let requestID = UUID()
@@ -133,7 +145,7 @@ final class Exchange {
             if last, !borrowed, let primaryRefusal {
                 await state.served(by: own, from: own, session: session, status: primaryRefusal.answer.head.status ?? 429,
                                    passedOver: passed, model: model, cacheLifetime: PoolPolicy.cacheLifetime(of: body),
-                                   threaded: PoolRequest.carriesThread(body: body), starts: PoolRequest.startsConversation(body: body),
+                                   threaded: threaded, starts: PoolRequest.startsConversation(body: body),
                                    prompted: PoolRequest.startsTurn(body: body))
                 return try await deliver(primaryRefusal.answer, body: primaryRefusal.body, method: head.method,
                                          keepAlive: head.keepsAlive)
@@ -144,7 +156,8 @@ final class Exchange {
                                               authorization: attempt.token.map { "Bearer \($0)" },
                                               plainAnswer: continuing && (borrowed || attempt.fableRecheck != nil))
             let answer: (head: HTTPHead, raw: Data)
-            await state.beginAttempt(requestID, from: own, member: attempt.member ?? own, model: model)
+            guard await state.beginAttempt(requestID, from: own, attempt: attempt, model: model, selection: selection)
+            else { return try await decline() }
             do {
                 answer = try await send(request)
             } catch {
@@ -222,7 +235,7 @@ final class Exchange {
                 await state.served(by: member, from: own, session: session, status: status,
                                    passedOver: passed, model: model,
                                    cacheLifetime: PoolPolicy.cacheLifetime(of: body),
-                                   threaded: PoolRequest.carriesThread(body: body),
+                                   threaded: threaded,
                                    starts: PoolRequest.startsConversation(body: body),
                                    prompted: PoolRequest.startsTurn(body: body))
             }

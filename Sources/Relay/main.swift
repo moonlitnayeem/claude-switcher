@@ -21,7 +21,7 @@ final class Relay {
     }
 
     private let options: Options
-    private let state = PoolState()
+    private lazy var state = PoolState()
     private let started = Date()
     private let queue = DispatchQueue(label: "relay")
     private var binary = ""
@@ -56,6 +56,9 @@ final class Relay {
             Diagnostics.note("relay already running", [:])
             exit(0)
         }
+        // Read the saved policy after the previous relay has stopped writing,
+        // before any client or control connection can reach this process.
+        _ = state
         remembered = PoolEnvironment.journalOnDisk()
         do {
             try PoolCertificates.ensure()
@@ -211,7 +214,7 @@ final class Relay {
         if command.quit == true {
             await stepAside()
         }
-        return await state.status(binary: binary, pid: getpid(), started: started)
+        return await state.status(binary: binary, pid: getpid(), started: started, change: command.accountPolicy)
     }
 
     /// Stops listening at once and lets go of the lock, so the relay replacing
@@ -235,6 +238,7 @@ final class Relay {
     }
 
     private func releaseListeners() async {
+        await state.stopPolicyChanges()
         state.clients.drain()
         watch?.cancel()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in

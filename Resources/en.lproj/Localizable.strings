@@ -700,3 +700,26 @@
 
 "More" = "More";
 "Claude Code uses Graft for this connection" = "Claude Code uses Graft for this connection";
+
+"Couldn’t change accounts" = "Couldn’t change accounts";
+"Use this account for new Claude Code requests in this profile." = "Use this account for new Claude Code requests in this profile.";
+"The relay cannot use this account yet. Check its sign-in." = "The relay cannot use this account yet. Check its sign-in.";
+"Account choice unavailable" = "Account choice unavailable";
+"Requests are paused because the relay could not read your saved account choice." = "Requests are paused because the relay could not read your saved account choice.";
+"Selected account is unavailable" = "Selected account is unavailable";
+"Choose another account below or turn on automatic switching to send requests again." = "Choose another account below or turn on automatic switching to send requests again.";
+"Connect this profile to the relay to change accounts here." = "Connect this profile to the relay to change accounts here.";
+"These controls apply to new Claude Code requests in this profile." = "These controls apply to new Claude Code requests in this profile.";
+"Selected account" = "Selected account";
+"Use only this account" = "Use only this account";
+"Selected account, %@" = "Selected account, %@";
+"Use only %@" = "Use only %@";
+"Using one account" = "Using one account";
+"Requests go only to %@, even if it is full. Turn on automatic switching to use backups." = "Requests go only to %@, even if it is full. Turn on automatic switching to use backups.";
+"Turn on to use backups. Turn off to use only your main account." = "Turn on to use backups. Turn off to use only your main account.";
+"Open Graft to change which account answers." = "Open Graft to change which account answers.";
+"Connect this profile in Graft to change accounts here." = "Connect this profile in Graft to change accounts here.";
+"Your version of Graft can show activity but can’t change accounts here." = "Your version of Graft can show activity but can’t change accounts here.";
+"Account controls are unavailable for this connection." = "Account controls are unavailable for this connection.";
+"This account is no longer on the list for this profile." = "This account is no longer on the list for this profile.";
+"The connection could not confirm your account choice. Check the current setting and try again." = "The connection could not confirm your account choice. Check the current setting and try again.";

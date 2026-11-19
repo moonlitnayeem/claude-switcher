@@ -1,5 +1,5 @@
 #!/bin/bash
-# Tests the read-only integration and Graft's explicit per-account reset action on a temporary socket.
+# Tests dashboard reads and explicit, scoped account controls on a temporary socket.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 python3 "$ROOT/Tests/GraftConnection/evidence.py"

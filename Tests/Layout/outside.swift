@@ -22,7 +22,9 @@ guard let window = windows.first(where: { text($0, kAXTitleAttribute).hasPrefix(
 }
 func walk(_ element: AXUIElement, depth: Int) {
     let identifier = text(element, "AXIdentifier")
-    if identifier == "window.routing.automatic" && CommandLine.arguments.contains("--toggle-routing-fixture") {
+    if CommandLine.arguments.count == 5, CommandLine.arguments[3] == "--press-routing-fixture",
+       identifier == CommandLine.arguments[4],
+       ["window.routing.automatic", "window.routing.only.studio", "window.routing.only.personal"].contains(identifier) {
         let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
         exit(result == .success ? 0 : 1)
     }

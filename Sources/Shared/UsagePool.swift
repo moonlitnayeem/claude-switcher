@@ -316,6 +316,42 @@ enum PoolRequest {
         return accountBoundMarks.contains { body.range(of: Data($0.utf8)) != nil }
     }
 
+    /// For an exclusive choice, verify the structure before sending anything
+    /// across accounts. Equivalent JSON can have whitespace or reordered keys.
+    struct AccountBinding {
+        var senderOnly: Bool
+        var bound: Bool
+        var continuing: Bool
+        var threaded: Bool
+    }
+
+    static func accountBinding(body: Data, contentEncoding: String?, model: String?) -> AccountBinding {
+        guard contentEncoding.map({ $0.isEmpty || $0.lowercased() == "identity" }) ?? true,
+              let root = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+            return AccountBinding(senderOnly: true, bound: true, continuing: false, threaded: false)
+        }
+        let thread = root["thread"] as? [String: Any]
+        let continuing = thread?["type"] as? String == "continue"
+        var result = AccountBinding(senderOnly: false, bound: continuing, continuing: continuing, threaded: thread != nil)
+        let reasoningBound = !(model.map { name in reasoningTravels.contains { name.hasPrefix($0) } } ?? false)
+        var remaining: [Any] = [root]
+        while let next = remaining.popLast() {
+            if let fields = next as? [String: Any] {
+                if fields["file_id"] is String || fields["container"] is String ||
+                    (fields["container"] as? [String: Any])?["id"] is String ||
+                    (fields["mcp_servers"] as? [Any])?.contains(where: { $0 is [String: Any] }) == true {
+                    result.senderOnly = true
+                }
+                if reasoningBound, let kind = fields["type"] as? String,
+                   kind == "thinking" || kind == "redacted_thinking" { result.bound = true }
+                remaining.append(contentsOf: fields.values)
+            } else if let items = next as? [Any] {
+                remaining.append(contentsOf: items)
+            }
+        }
+        return result
+    }
+
     /// Reasoning the model wrote earlier in a conversation is carried back in
     /// every later request, and for some models the service honours it only
     /// from the account that wrote it: from any other it is dropped without a
@@ -451,6 +487,13 @@ struct PoolConfiguration: Codable, Equatable {
     var primaryFirst: Bool?
 }
 
+struct PoolAccountPolicyChange: Codable, Equatable {
+    enum Mode: String, Codable { case automatic, only }
+    var profile: String
+    var mode: Mode
+    var member: String? = nil
+}
+
 struct PoolCommand: Codable {
     var configure: PoolConfiguration?
     /// A full snapshot of paused senders can travel without keychain credentials.
@@ -462,6 +505,7 @@ struct PoolCommand: Codable {
     /// Asks a relay built from a different binary to step aside: it stops
     /// listening at once and leaves when its last exchange finishes.
     var quit: Bool?
+    var accountPolicy: PoolAccountPolicyChange? = nil
 }
 
 struct PoolPass: Codable, Equatable {
@@ -552,6 +596,12 @@ struct PoolStatus: Codable, Equatable {
     var sessions: [PoolSession]
     var openExchanges: Int
     var activeRoutes: [PoolActiveRoute]? = nil
+    /// Nil for older relays and when the saved restrictions could not be read.
+    /// An empty dictionary means this relay supports changes and has no restrictions.
+    var exclusiveAccounts: [String: String]? = nil
+    /// Existing member IDs this relay can currently accept for each profile.
+    var selectableAccounts: [String: [String]]? = nil
+    var accountPolicyError: String? = nil
 }
 
 enum PoolSocket {
