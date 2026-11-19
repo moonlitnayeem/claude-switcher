@@ -158,7 +158,7 @@ struct ContentView: View {
     private var sidebar: some View {
         List(selection: $selection) {
             Section("Switch accounts") {
-                Label("Claude Code", systemImage: "point.3.connected.trianglepath.dotted")
+                Label("Claude Desktop", systemImage: "macwindow")
                     .identified("sidebar.routing")
                     .tag(Self.routingID)
                 Label("ChatGPT & Codex", systemImage: "bubble.left.and.text.bubble.right")

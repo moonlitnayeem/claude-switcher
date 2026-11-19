@@ -682,3 +682,20 @@
 "Remove backup" = "Remove backup";
 "Remove %@ as a backup" = "Remove %@ as a backup";
 "Stop using this backup for this profile. Its sign-in stays saved." = "Stop using this backup for this profile. Its sign-in stays saved.";
+
+"Claude Code account map" = "Claude Code account map";
+"Open Claude Desktop" = "Open Claude Desktop";
+"More ways to open Claude" = "More ways to open Claude";
+"Open Claude Code in Terminal…" = "Open Claude Code in Terminal…";
+"Open in Terminal" = "Open in Terminal";
+"Pick a project folder. Claude Code in Terminal uses its own sign-in and settings. Desktop account switching applies only in Claude Desktop." = "Pick a project folder. Claude Code in Terminal uses its own sign-in and settings. Desktop account switching applies only in Claude Desktop.";
+"Open the main Claude Desktop window?" = "Open the main Claude Desktop window?";
+"A different Claude profile is open. This opens the main profile in its own window." = "A different Claude profile is open. This opens the main profile in its own window.";
+"Open main window" = "Open main window";
+"Could not open Claude" = "Could not open Claude";
+"Claude Desktop could not be found. Install Claude Desktop and try again." = "Claude Desktop could not be found. Install Claude Desktop and try again.";
+"Claude Desktop could not be brought forward. Try opening it again." = "Claude Desktop could not be brought forward. Try opening it again.";
+"The Claude Code command-line app could not be found on this Mac." = "The Claude Code command-line app could not be found on this Mac.";
+"macOS Terminal could not be found." = "macOS Terminal could not be found.";
+
+"More" = "More";

@@ -18,7 +18,8 @@ struct GraftConnectionView: View {
         let enabled = status?.configured == true && status?.enabled == true && !(snapshot.lenders[key] ?? []).isEmpty
         RoutingPanel(data: display(profile: key), enabled: .constant(enabled), canSwitch: false,
                      recheck: { member in recheck(member, profile: key) },
-                     renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) }) {
+                     renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) },
+                     launchControls: key == "main" ? ClaudeLaunchControls() : nil) {
             if snapshot.profiles.count > 1 {
                 Picker("Claude profile", selection: Binding(get: { key }, set: { profile = $0 })) {
                     ForEach(snapshot.profiles, id: \.self) { id in Text(profileName(id)).tag(id) }

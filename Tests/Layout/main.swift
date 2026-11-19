@@ -394,6 +394,10 @@ for page in pages {
     settle()
     let pageName = "the \(page.name) page"
     for state in ["current", "available", "error", "current-again"] {
+        if page.selection == ContentView.openAIID {
+            if state == "available" { layoutDefaults.set(true, forKey: "openai.showSeparateProfiles") }
+            else { layoutDefaults.removeObject(forKey: "openai.showSeparateProfiles") }
+        }
         UpdateResponse.available = state == "available"
         UpdateResponse.failing = state == "error"
         Shared.claudeUpdates.check()
@@ -492,15 +496,32 @@ for page in pages {
                     }
                     check(element("window.routing.remove.personal", in: tree) == nil,
                           "\(place): only backups can be removed")
+                    check(element("window.routing.launch.desktop", in: tree)?.name == L10n.text("Open Claude Desktop"),
+                          "\(place): the main profile offers its desktop app first")
+                    check(element("window.routing.launch.options", in: tree)?.name == L10n.text("More ways to open Claude"),
+                          "\(place): the optional Claude CLI launch has a separate menu")
                     for control in ["sidebar.routing", "sidebar.openai", "routing.dashboard", "routing.automatic", "shared-usage.add", "routing.settings"] {
                         check(element("window.\(control)", in: tree) != nil,
                               "\(place): dashboard control \(control) is accessible")
                     }
                 }
                 if page.selection == ContentView.openAIID {
+                    for (control, title) in [("desktop", "Open desktop app"), ("desktop-project", "Open project…")] {
+                        let action = element("window.openai.\(control)", in: tree)
+                        check(action?.role == kAXButtonRole && action?.name == OpenAICopy.text(title),
+                              "\(place): the desktop action \(control) is visible")
+                    }
+                    check(element("window.openai.separate-accounts", in: tree) != nil,
+                          "\(place): Chrome and Terminal profiles have a disclosure")
+                    if state == "current" {
+                        check(element("window.openai.add", in: tree) == nil && element("window.openai.chat", in: tree) == nil,
+                              "\(place): the initial page leads with the desktop app")
+                    }
+                }
+                if page.selection == ContentView.openAIID && state == "available" {
                     for (control, title) in [
                         ("add", "Add account"), ("rename", "Rename selected account"), ("slot.first", "Account 1"),
-                        ("slot.second", "Account 2"), ("chat", "Open ChatGPT"), ("codex", "Open Codex…"),
+                        ("slot.second", "Account 2"), ("chat", "Open in Chrome"), ("codex", "Open in Terminal…"),
                         ("usual-browser", "Use my usual browser"),
                     ] {
                         let action = element("window.openai.\(control)", in: tree)
@@ -693,15 +714,19 @@ do {
     index.setRemoved(true, .second)
     defaults.set(try JSONEncoder().encode(index), forKey: "openai.profileIndex")
     defaults.set(temporary.path, forKey: "openai.lastProject")
+    defaults.set(temporary.path, forKey: "openai.lastDesktopProject")
+    defaults.set(true, forKey: "openai.showSeparateProfiles")
 
     let compact = hosted(OpenAIAccountsView().frame(width: 540, height: 520)
         .defaultAppStorage(defaults).environment(\.controlSurface, ControlSurface.window),
         title: "Many accounts at compact width")
     let tree = checkAccessibility(compact, surface: ControlSurface.window, "many OpenAI accounts at compact width")
-    for control in ["picker", "rename", "add", "options", "restore", "chat", "codex", "same-folder"] {
+    for control in ["desktop", "desktop-project", "desktop-reopen", "picker", "rename", "add", "options", "restore", "chat", "codex", "same-folder"] {
         check(element("window.openai.\(control)", in: tree) != nil,
               "compact OpenAI profiles expose their \(control) control")
     }
+    check(element("window.openai.desktop-reopen", in: tree)?.name == OpenAICopy.text("Reopen project"),
+          "a saved desktop project can be reopened without selecting a Terminal profile")
     check(element("window.openai.same-folder", in: tree)?.name == OpenAICopy.text("Use same folder"),
           "a different account can open the same local project in a new session")
     check(tree.contains { [$0.name, $0.value].contains("Team account 9") },

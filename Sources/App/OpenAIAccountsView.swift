@@ -7,6 +7,8 @@ struct OpenAIAccountsView: View {
     @AppStorage("openai.firstLabel") private var legacyFirst = ""
     @AppStorage("openai.secondLabel") private var legacySecond = ""
     @AppStorage("openai.lastProject") private var lastProject = ""
+    @AppStorage("openai.lastDesktopProject") private var lastDesktopProject = ""
+    @AppStorage("openai.showSeparateProfiles") private var showSeparateProfiles = false
     @State private var editing = false
     @State private var editingID: OpenAIAccountSlot?
     @State private var pendingRemoval: OpenAIProfileIndex.Profile?
@@ -30,41 +32,57 @@ struct OpenAIAccountsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("ChatGPT & Codex").font(.system(size: 32, weight: .bold, design: .rounded))
                     .accessibilityAddTraits(.isHeader)
-                if let index {
-                    accountList(index)
-                } else {
-                    Label(copy("Your saved account list could not be read."), systemImage: "exclamationmark.circle")
-                }
-
-                appCard("ChatGPT", symbol: "bubble.left.and.bubble.right.fill", tone: .teal,
-                        detail: copy("Open a separate Chrome window for this account. Sign in there the first time."),
-                        action: copy("Open ChatGPT"), id: "openai.chat", tapped: openChat) {
-                    Button(copy("Use my usual browser")) {
-                        if NSWorkspace.shared.open(OpenAIProfileLauncher.chatURL) {
-                            feedback = copy("In ChatGPT, open your profile menu and choose the account you want.")
-                        } else { errorText = copy("Your browser could not open ChatGPT.") }
+                desktopCard
+                Button {
+                    showSeparateProfiles.toggle()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: showSeparateProfiles ? "chevron.down" : "chevron.right").accessibilityHidden(true)
+                        Text(copy("Browser and Terminal profiles")).font(.headline)
                     }
-                        .buttonStyle(.link).identified("openai.usual-browser")
-                        .help(copy("In ChatGPT, open your profile menu and choose the account you want."))
                 }
-                appCard("Codex", symbol: "terminal.fill", tone: .indigo,
-                        detail: copy("Pick a project folder to start Codex in Terminal. Sign in with this account the first time."),
-                        action: copy("Open Codex…"), id: "openai.codex", tapped: openCodex) {
-                    if !lastProject.isEmpty {
-                        Button(copy("Use same folder")) {
-                            launchCodex(at: URL(fileURLWithPath: lastProject, isDirectory: true))
+                .buttonStyle(.plain)
+                .accessibilityValue(copy(showSeparateProfiles ? "Expanded" : "Collapsed"))
+                .identified("openai.separate-accounts")
+                if showSeparateProfiles {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let index {
+                            accountList(index)
+                        } else {
+                            Label(copy("Your saved account list could not be read."), systemImage: "exclamationmark.circle")
                         }
-                        .buttonStyle(.link).identified("openai.same-folder")
-                        .disabled(index?.selected == nil || opening)
-                        .help(lastProject)
-                    }
-                    if OpenAIProfileLauncher.codexURL() == nil {
-                        Link(copy("Get Codex"), destination: OpenAIProfileLauncher.cliURL).identified("openai.install-codex")
+
+                        appCard(copy("ChatGPT in Chrome"), symbol: "bubble.left.and.bubble.right.fill", tone: .teal,
+                                detail: copy("Open a separate Chrome window for this account. Sign in there the first time."),
+                                action: copy("Open in Chrome"), id: "openai.chat", tapped: openChat) {
+                            Button(copy("Use my usual browser")) {
+                                if NSWorkspace.shared.open(OpenAIProfileLauncher.chatURL) {
+                                    feedback = copy("In ChatGPT, open your profile menu and choose the account you want.")
+                                } else { errorText = copy("Your browser could not open ChatGPT.") }
+                            }
+                                .buttonStyle(.link).identified("openai.usual-browser")
+                                .help(copy("In ChatGPT, open your profile menu and choose the account you want."))
+                        }
+                        appCard(copy("Codex in Terminal"), symbol: "terminal.fill", tone: .indigo,
+                                detail: copy("Pick a project folder to start Codex in Terminal. Sign in with this account the first time."),
+                                action: copy("Open in Terminal…"), id: "openai.codex", tapped: openCodex) {
+                            if !lastProject.isEmpty {
+                                Button(copy("Use same folder")) {
+                                    launchCodex(at: URL(fileURLWithPath: lastProject, isDirectory: true))
+                                }
+                                .buttonStyle(.link).identified("openai.same-folder")
+                                .disabled(index?.selected == nil || opening)
+                                .help(lastProject)
+                            }
+                            if OpenAIProfileLauncher.codexURL() == nil {
+                                Link(copy("Get Codex"), destination: OpenAIProfileLauncher.cliURL).identified("openai.install-codex")
+                            }
+                        }
+                        Label(copy("Switch inside a ChatGPT tab using its profile menu. Chats stay with their account. In Codex, a new session can work on the same files."),
+                              systemImage: "info.circle")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Label(copy("Switch inside a ChatGPT tab using its profile menu. Chats stay with their account. In Codex, a new session can work on the same files."),
-                      systemImage: "info.circle")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if !feedback.isEmpty {
                     Label(feedback, systemImage: "checkmark.circle.fill").foregroundStyle(.secondary)
                 }
@@ -96,10 +114,55 @@ struct OpenAIAccountsView: View {
         } message: { profile in
             Text(String(format: copy("You can restore %@ with its sign-ins from Removed accounts."), profile.displayName))
         }
-        .alert(copy("Couldn’t open the account"), isPresented: Binding(
+        .alert(copy("Couldn’t open the app"), isPresented: Binding(
             get: { errorText != nil }, set: { if !$0 { errorText = nil } })) {
             Button(copy("OK")) { errorText = nil }
         } message: { Text(errorText ?? "") }
+    }
+
+    private var desktopCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(copy("Codex Desktop"), systemImage: "macwindow").font(.title2.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text(copy("Desktop uses the account signed in there. Choose Codex or ChatGPT from the menu at the top left."))
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { desktopButtons }
+                VStack(alignment: .leading, spacing: 10) { desktopButtons }
+            }
+            Text(copy("To use another account, sign out in the desktop app and sign in with that account. Opening a project starts a new Codex chat with its local files.")).font(.callout)
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if OpenAIDesktop.installedURL() == nil {
+                Link(copy("Get the desktop app"), destination: OpenAIDesktop.downloadURL).identified("openai.install-desktop")
+            }
+        }
+        .padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14).fill(accent.opacity(0.09)))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(accent.opacity(0.26)))
+    }
+
+    @ViewBuilder private var desktopButtons: some View {
+        Button(copy("Open desktop app")) {
+            launch(message: copy("Opened the desktop app.")) { try await OpenAIDesktop.open() }
+        }.buttonStyle(.borderedProminent).tint(accent).identified("openai.desktop").disabled(opening)
+        Button(copy("Open project…")) {
+            guard OpenAIDesktop.installedURL() != nil else {
+                errorText = OpenAILaunchError.desktopMissing.localizedDescription
+                return
+            }
+            if let folder = chooseFolder() { openDesktopProject(folder) }
+        }.identified("openai.desktop-project").disabled(opening)
+        if !lastDesktopProject.isEmpty {
+            Button(copy("Reopen project")) { openDesktopProject(URL(fileURLWithPath: lastDesktopProject, isDirectory: true)) }
+                .buttonStyle(.link).identified("openai.desktop-reopen").help(lastDesktopProject).disabled(opening)
+        }
+    }
+
+    private func openDesktopProject(_ folder: URL) {
+        launch(message: copy("Opened your project in Codex Desktop.")) {
+            try await OpenAIDesktop.open(project: folder)
+            lastDesktopProject = folder.path
+        }
     }
 
     private var validName: Bool { index?.canUse(draftName, for: editingID) == true }
@@ -225,21 +288,24 @@ struct OpenAIAccountsView: View {
             errorText = OpenAILaunchError.codexMissing.localizedDescription
             return
         }
+        if let project = chooseFolder() { launchCodex(at: project) }
+    }
+
+    private func chooseFolder() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         panel.message = copy("Choose the project you want to work on.")
-        panel.prompt = copy("Open Codex")
-        guard panel.runModal() == .OK, let project = panel.url else { return }
-        launchCodex(at: project)
+        panel.prompt = copy("Open project")
+        return panel.runModal() == .OK ? panel.url : nil
     }
 
     private func launchCodex(at project: URL) {
         guard let profile = index?.selected else { return }
         let values = try? project.resourceValues(forKeys: [.isDirectoryKey])
         guard values?.isDirectory == true else {
-            errorText = copy("This project folder moved. Choose it again with Open Codex.")
+            errorText = OpenAILaunchError.invalidProject.localizedDescription
             return
         }
         launch(message: String(format: copy("Opened Terminal for %@."), profile.displayName)) {

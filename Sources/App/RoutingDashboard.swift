@@ -49,7 +49,8 @@ struct RoutingDashboard: View {
             set: { pool.setAutomaticSwitching($0, for: key) }
         ), canSwitch: UsagePoolController.isSupported, recheck: pool.recheckFable,
                      removeBackup: { pool.removeLender($0, from: key) },
-                     renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) }) {
+                     renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) },
+                     launchControls: key == UsagePoolController.mainKey ? ClaudeLaunchControls() : nil) {
             if profiles.count > 1 {
                 Picker("Profile", selection: Binding(get: { key }, set: { profile = $0 })) {
                     ForEach(profiles, id: \.self) { item in Text(pool.name(of: item)).tag(item) }
@@ -235,6 +236,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     let recheck: (String) -> Void
     var removeBackup: ((String) -> Void)? = nil
     var renameAccount: ((String) -> Void)? = nil
+    var launchControls: ClaudeLaunchControls? = nil
     @ViewBuilder let profile: () -> Profile
     @ViewBuilder let accountActions: () -> AccountActions
     @ViewBuilder let manage: () -> Manage
@@ -253,11 +255,24 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
             let compact = geo.size.width < 580
             ScrollView {
                 VStack(alignment: .leading, spacing: compact ? 17 : 22) {
-                    HStack(alignment: .center) {
-                        Text("Claude Code").font(.system(size: compact ? 27 : 32, weight: .bold, design: .rounded))
-                            .accessibilityAddTraits(.isHeader).identified("routing.dashboard")
-                        Spacer(minLength: 8)
-                        profile()
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .center) {
+                            Text("Claude Desktop").font(.system(size: compact ? 27 : 32, weight: .bold, design: .rounded))
+                                .accessibilityAddTraits(.isHeader).identified("routing.dashboard")
+                            Spacer(minLength: 8)
+                            profile()
+                        }
+                        ViewThatFits(in: .horizontal) {
+                            HStack {
+                                Text("Claude Code account map").font(.callout).foregroundStyle(.secondary)
+                                Spacer(minLength: 12)
+                                launchControls
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Claude Code account map").font(.callout).foregroundStyle(.secondary)
+                                launchControls
+                            }
+                        }
                     }
                     RoutingOrbitCard(data: data, enabled: $enabled, canSwitch: canSwitch, compact: compact)
                     VStack(alignment: .leading, spacing: 9) {
@@ -403,6 +418,72 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ClaudeLaunchControls: View {
+    var openDesktop: @MainActor (Bool) async throws -> Bool = { try await ClaudeAppLauncher.openDesktop(allowSeparateWindow: $0) }
+    var openTerminal: @MainActor () async throws -> Void = {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = L10n.text("Open in Terminal")
+        panel.message = L10n.text("Pick a project folder. Claude Code in Terminal uses its own sign-in and settings. Desktop account switching applies only in Claude Desktop.")
+        if panel.runModal() == .OK, let folder = panel.url {
+            try await ClaudeAppLauncher.openCLI(project: folder)
+        }
+    }
+
+    private enum Notice: Identifiable {
+        case separateWindow, failure(String)
+        var id: String {
+            switch self { case .separateWindow: return "separate"; case .failure(let message): return message }
+        }
+    }
+
+    @State private var notice: Notice?
+    @State private var opening = false
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Button { launchDesktop() } label: {
+                Label("Open Claude Desktop", systemImage: "macwindow")
+            }.buttonStyle(.borderedProminent).controlSize(.small)
+                .identified("routing.launch.desktop")
+            Menu {
+                Button("Open Claude Code in Terminal…") {
+                    Task { do { try await openTerminal() } catch { notice = .failure(error.localizedDescription) } }
+                }.identified("routing.launch.cli")
+            } label: {
+                Text("More")
+            }.menuStyle(.button).controlSize(.small)
+                .help("More ways to open Claude").accessibilityLabel("More ways to open Claude")
+                .identified("routing.launch.options")
+        }.disabled(opening)
+        .alert(item: $notice) { notice in
+            switch notice {
+            case .separateWindow:
+                return Alert(title: Text("Open the main Claude Desktop window?"),
+                             message: Text("A different Claude profile is open. This opens the main profile in its own window."),
+                             primaryButton: .default(Text("Open main window")) { launchDesktop(allowSeparateWindow: true) },
+                             secondaryButton: .cancel())
+            case .failure(let message):
+                return Alert(title: Text("Could not open Claude"), message: Text(message),
+                             dismissButton: .default(Text("OK")))
+            }
+        }
+    }
+
+    private func launchDesktop(allowSeparateWindow: Bool = false) {
+        guard !opening else { return }
+        opening = true
+        Task {
+            defer { opening = false }
+            do {
+                if try await !openDesktop(allowSeparateWindow) { notice = .separateWindow }
+            } catch { notice = .failure(error.localizedDescription) }
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 /// IDs also name private profile directories. The first release used "first" and "second".
 struct OpenAIAccountSlot: RawRepresentable, Codable, Hashable, Identifiable {
@@ -88,14 +89,72 @@ enum OpenAICopy {
 }
 
 enum OpenAILaunchError: LocalizedError {
-    case browserMissing, codexMissing, terminalMissing, invalidProfile
+    case browserMissing, codexMissing, terminalMissing, invalidProfile, desktopMissing, desktopIdentity, invalidProject
 
     var errorDescription: String? {
         switch self {
+        case .desktopMissing: return OpenAICopy.text("Install the ChatGPT desktop app to open Codex on your Mac.")
+        case .desktopIdentity: return OpenAICopy.text("macOS could not verify this copy of the OpenAI desktop app.")
+        case .invalidProject: return OpenAICopy.text("This folder moved. Choose your project folder again.")
         case .browserMissing: return OpenAICopy.text("Install Google Chrome to use separate ChatGPT windows, or open ChatGPT in your usual browser.")
         case .codexMissing: return OpenAICopy.text("Install the Codex command-line app to start a session in Terminal.")
         case .terminalMissing: return OpenAICopy.text("macOS Terminal could not be found.")
         case .invalidProfile: return OpenAICopy.text("This account folder could not be opened safely.")
+        }
+    }
+}
+
+/// OpenAI's macOS "codex app PATH" uses this bundle ID and project URL.
+/// Address the installed app directly so a missing app never starts an installer.
+enum OpenAIDesktop {
+    static let bundleID = "com.openai.codex"
+    static let downloadURL = URL(string: "https://chatgpt.com/download")!
+
+    static func installedURL() -> URL? {
+        let fm = FileManager.default
+        let roots = fm.urls(for: .applicationDirectory, in: [.localDomainMask, .userDomainMask])
+        let standard = roots.flatMap { root in ["ChatGPT.app", "Codex.app"].map { root.appendingPathComponent($0) } }
+        let registered = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        return (standard + [registered].compactMap { $0 }).first { Bundle(url: $0)?.bundleIdentifier == bundleID }
+    }
+
+    static func verify(_ app: URL) throws {
+        var code: SecStaticCode?
+        var requirement: SecRequirement?
+        let rule = #"identifier "com.openai.codex" and anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2""#
+        let flags = SecCSFlags()
+        guard SecStaticCodeCreateWithPath(app as CFURL, flags, &code) == errSecSuccess,
+              let code,
+              SecRequirementCreateWithString(rule as CFString, flags, &requirement) == errSecSuccess,
+              let requirement,
+              SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess else {
+            throw OpenAILaunchError.desktopIdentity
+        }
+    }
+
+    static func projectURL(_ directory: URL) throws -> URL {
+        guard directory.isFileURL,
+              (try? directory.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+            throw OpenAILaunchError.invalidProject
+        }
+        let path = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        // The desktop app reads this as form data, so a literal + must be encoded.
+        let unreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        guard let escaped = path.addingPercentEncoding(withAllowedCharacters: unreserved),
+              let url = URL(string: "codex://threads/new?path=" + escaped) else { throw OpenAILaunchError.invalidProject }
+        return url
+    }
+
+    @MainActor
+    static func open(project: URL? = nil) async throws {
+        guard let app = installedURL() else { throw OpenAILaunchError.desktopMissing }
+        let link = try project.map(projectURL)
+        try await Task.detached(priority: .userInitiated) { try verify(app) }.value
+        let configuration = NSWorkspace.OpenConfiguration()
+        if let link {
+            _ = try await NSWorkspace.shared.open([link], withApplicationAt: app, configuration: configuration)
+        } else {
+            _ = try await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
         }
     }
 }

@@ -113,4 +113,29 @@ check(index.selected?.label == "New" && index.removed.count == 32, "adding works
 check(OpenAIAccountSlot(rawValue: "../other") == nil
         && (try? JSONDecoder().decode(OpenAIAccountSlot.self, from: Data(#""../other""#.utf8))) == nil,
       "persisted account IDs cannot point outside a profile directory")
+let desktopProject = scratch.appendingPathComponent("Room + Café? a&b#1%")
+try fm.createDirectory(at: desktopProject, withIntermediateDirectories: true)
+let nativeLink = try OpenAIDesktop.projectURL(desktopProject)
+let linkParts = URLComponents(url: nativeLink, resolvingAgainstBaseURL: false)
+check(linkParts?.scheme == "codex" && linkParts?.host == "threads" && linkParts?.path == "/new",
+      "desktop opens a fresh native Codex composer")
+let targetItems = linkParts?.queryItems ?? []
+let decodedFolder = targetItems.first?.value.map { URL(fileURLWithPath: $0, isDirectory: true) }
+check(targetItems.count == 1 && targetItems.first?.name == "path"
+      && decodedFolder.flatMap { fm.fileExists(atPath: $0.path) ? physicalPath($0) : nil } == physicalPath(desktopProject),
+      "the native handoff supplies only the selected local folder, with no prompt or account override")
+check(nativeLink.absoluteString.contains("%2B") && nativeLink.absoluteString.contains("%26")
+      && nativeLink.absoluteString.contains("%23") && nativeLink.absoluteString.contains("%25"),
+      "project names with form punctuation survive the desktop app URL parser")
+check((try? OpenAIDesktop.projectURL(fake)) == nil && (try? OpenAIDesktop.projectURL(scratch.appendingPathComponent("missing"))) == nil,
+      "desktop rejects missing folders and non-folder selections")
+var refusedApp = false
+do { try OpenAIDesktop.verify(fake) } catch { refusedApp = true }
+check(refusedApp, "the desktop launcher rejects an unsigned target")
+if ProcessInfo.processInfo.environment["AI_SWITCHER_VERIFY_DESKTOP"] == "1" {
+    guard let app = OpenAIDesktop.installedURL() else { fatalError("The official desktop app could not be located") }
+    try OpenAIDesktop.verify(app)
+    check(Bundle(url: app)?.bundleIdentifier == OpenAIDesktop.bundleID, "the installed native app matches the expected OpenAI signature and bundle")
+    print("Verified desktop app:", app.lastPathComponent)
+}
 print("\(checks) account profile checks passed")

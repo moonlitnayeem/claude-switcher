@@ -404,6 +404,57 @@ do {
     try? fm.removeItem(at: styled.profileDir)
 }
 
+section("Claude Desktop and Terminal launch choices")
+do {
+    let mainCommand = "/Applications/Claude.app/Contents/MacOS/Claude"
+    let shortcutCommand = mainCommand + " --user-data-dir=/tmp/example"
+    check(ClaudeAppLauncher.desktopTarget([]) == .launch,
+          "Open Claude Desktop launches the stock app when it is closed")
+    check(ClaudeAppLauncher.desktopTarget([(32, shortcutCommand), (15, mainCommand)]) == .running(15),
+          "Open Claude Desktop brings forward the main window when a shortcut is also open")
+    check(ClaudeAppLauncher.desktopTarget([(32, shortcutCommand)]) == .confirmMainWindow
+            && ClaudeAppLauncher.desktopTarget([(32, "")]) == .confirmMainWindow,
+          "another profile or an unreadable process cannot be mistaken for the main window")
+
+    let scratch = root.appending(path: "Desktop entry checks")
+    let impostor = scratch.appending(path: "lookalike/Claude.app")
+    let official = scratch.appending(path: "registered/Claude.app")
+    for (app, identifier) in [(impostor, "example.other-app"), (official, ClaudeAppLauncher.bundleID)] {
+        let contents = app.appending(path: "Contents")
+        try fm.createDirectory(at: contents, withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": identifier, "CFBundlePackageType": "APPL"],
+                                           format: .xml, options: 0).write(to: contents.appending(path: "Info.plist"))
+    }
+    check(ClaudeAppLauncher.installedDesktop([impostor, official]) == official
+            && ClaudeAppLauncher.installedDesktop([impostor]) == nil,
+          "the registered Claude Desktop bundle is recognized even when a lookalike is named Claude.app")
+
+    let fakeHome = scratch.appending(path: "home")
+    let binary = fakeHome.appending(path: ".local/bin/claude")
+    let project = scratch.appending(path: "Client’s 'project' $(command) & notes")
+    try fm.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try fm.createDirectory(at: project, withIntermediateDirectories: true)
+    try Data("#!/bin/zsh\nprint -r -- \"$PWD|$#|$CLAUDE_LAUNCH_FIXTURE_VALUE\"\n".utf8).write(to: binary)
+    try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
+    check(ClaudeAppLauncher.cliURL(home: fakeHome, path: "") == binary, "the local Claude CLI is found independently of Desktop")
+    let command = try ClaudeAppLauncher.terminalCommand(executable: binary, project: project, directory: scratch)
+    let task = Process()
+    task.executableURL = command
+    task.environment = ["CLAUDE_LAUNCH_FIXTURE_VALUE": "inherited", "PATH": "/usr/bin:/bin"]
+    let pipe = Pipe()
+    task.standardOutput = pipe
+    try task.run()
+    let result = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        .trimmingCharacters(in: .newlines)
+    task.waitUntilExit()
+    check(task.terminationStatus == 0 && result.hasSuffix("|0|inherited")
+            && Graft.samePath(URL(fileURLWithPath: result.components(separatedBy: "|").first ?? ""), project),
+          "the Terminal launcher runs the selected CLI in the literal project folder with its existing environment and no account flags")
+    check(!fm.fileExists(atPath: command.path), "the temporary Terminal start file removes itself")
+} catch {
+    check(false, "the isolated Desktop and Terminal launch fixtures run: \(error)")
+}
+
 section("Legacy launcher refresh")
 do {
     let shortcut = Shortcut(name: "Legacy", source: .own)

@@ -682,3 +682,20 @@
 "Remove backup" = "Убрать из резервных";
 "Remove %@ as a backup" = "Убрать %@ из резервных";
 "Stop using this backup for this profile. Its sign-in stays saved." = "Убрать резервный аккаунт из этого профиля. Вход останется сохранённым.";
+
+"Claude Code account map" = "Карта аккаунтов Claude Code";
+"Open Claude Desktop" = "Открыть Claude Desktop";
+"More ways to open Claude" = "Другие способы открыть Claude";
+"Open Claude Code in Terminal…" = "Открыть Claude Code в Терминале…";
+"Open in Terminal" = "Открыть в Терминале";
+"Pick a project folder. Claude Code in Terminal uses its own sign-in and settings. Desktop account switching applies only in Claude Desktop." = "Выберите папку проекта. Claude Code в Терминале использует собственный вход и настройки. Переключение аккаунтов приложения действует только в Claude Desktop.";
+"Open the main Claude Desktop window?" = "Открыть основное окно Claude Desktop?";
+"A different Claude profile is open. This opens the main profile in its own window." = "Открыт другой профиль Claude. Основной профиль откроется в отдельном окне.";
+"Open main window" = "Открыть основное окно";
+"Could not open Claude" = "Не удалось открыть Claude";
+"Claude Desktop could not be found. Install Claude Desktop and try again." = "Не удалось найти Claude Desktop. Установите приложение и попробуйте снова.";
+"Claude Desktop could not be brought forward. Try opening it again." = "Не удалось вывести Claude Desktop на передний план. Попробуйте открыть его снова.";
+"The Claude Code command-line app could not be found on this Mac." = "На этом Mac не найдена программа командной строки Claude Code.";
+"macOS Terminal could not be found." = "Не удалось найти приложение Терминал для macOS.";
+
+"More" = "Ещё";

@@ -34,7 +34,8 @@ struct DemoDashboard: View {
             lastAnswered: empty ? nil : Date(timeIntervalSince1970: 1_783_348_200), route: route)
         RoutingPanel(data: snapshot, enabled: $enabled, canSwitch: true, recheck: { _ in queued = true },
                      removeBackup: { _ in removed = true },
-                     renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: id == primary.id ? primary.name : backup.name) }) {
+                     renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: id == primary.id ? primary.name : backup.name) },
+                     launchControls: ClaudeLaunchControls(openDesktop: { _ in true }, openTerminal: {})) {
             Label("Claude", systemImage: "laptopcomputer").font(.callout.weight(.medium)).foregroundStyle(.secondary)
         } accountActions: {
             Menu {
