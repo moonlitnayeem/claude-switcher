@@ -15,7 +15,6 @@
 "Pick a project folder to start Codex in Terminal. Sign in with this account the first time." = "Pick a project folder to start Codex in Terminal. Sign in with this account the first time.";
 "Open Codex…" = "Open Codex…";
 "Get Codex" = "Get Codex";
-"Your choice applies to the next window. Open chats and tasks stay with their own account." = "Your choice applies to the next window. Open chats and tasks stay with their own account.";
 "Account name" = "Account name";
 "Name" = "Name";
 "Cancel" = "Cancel";
@@ -27,3 +26,19 @@
 "Open Codex" = "Open Codex";
 "Opened Terminal for %@." = "Opened Terminal for %@.";
 "Use the same email when you sign in to ChatGPT and Codex for this name." = "Use the same email when you sign in to ChatGPT and Codex for this name.";
+"Account %lld" = "Account %lld";
+"Add account" = "Add account";
+"Your saved account list could not be read." = "Your saved account list could not be read.";
+"Use same folder" = "Use same folder";
+"This project folder moved. Choose it again with Open Codex." = "This project folder moved. Choose it again with Open Codex.";
+"Switch inside a ChatGPT tab using its profile menu. Chats stay with their account. In Codex, a new session can work on the same files." = "Switch inside a ChatGPT tab using its profile menu. Chats stay with their account. In Codex, a new session can work on the same files.";
+"Use a different name, up to 48 characters." = "Use a different name, up to 48 characters.";
+"Remove this account from the list?" = "Remove this account from the list?";
+"Remove" = "Remove";
+"Remove from list…" = "Remove from list…";
+"You can restore %@ with its sign-ins from Removed accounts." = "You can restore %@ with its sign-ins from Removed accounts.";
+"Account options" = "Account options";
+"Selected account" = "Selected account";
+"Add an account to open ChatGPT or Codex." = "Add an account to open ChatGPT or Codex.";
+"Removed accounts" = "Removed accounts";
+"Restore %@" = "Restore %@";

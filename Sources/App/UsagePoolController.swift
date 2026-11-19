@@ -376,15 +376,25 @@ final class UsagePoolController: ObservableObject {
         save(next)
     }
 
-    /// An account signed in through Graft goes when the last Claude using it
-    /// lets it go: nothing else would ever lend it, and its token is a year of
-    /// access nobody is looking at.
+    /// Unlinking this profile keeps its backup available for someone to choose again later.
     func removeLender(_ lender: String, from claude: String) {
+        guard lenders(of: claude).contains(lender) else { return }
         var next = sharing
         next.lenders[claude]?.removeAll { $0 == lender }
         if next.lenders[claude]?.isEmpty == true { next.lenders[claude] = nil }
         save(next)
-        forgetUnusedAccounts()
+    }
+
+    var unusedSavedAccounts: [PoolAccount] {
+        let linked = Set(sharing.lenders.values.flatMap { $0 })
+        return accounts.filter { !linked.contains($0.id) }
+    }
+
+    func forgetUnusedAccount(_ id: String) {
+        guard unusedSavedAccounts.contains(where: { $0.id == id }) else { return }
+        let remaining = accounts.filter { $0.id != id }
+        guard write(remaining, to: UsagePool.accountsFile) else { return }
+        accounts = remaining
     }
 
     func assign(_ session: String, to member: String?) {
@@ -417,14 +427,6 @@ final class UsagePoolController: ObservableObject {
         }
         addLender(stored.id, to: claude)
         sync()
-    }
-
-    private func forgetUnusedAccounts() {
-        let used = Set(sharing.lenders.values.flatMap { $0 })
-        let kept = accounts.filter { used.contains($0.id) }
-        guard kept.count != accounts.count else { return }
-        accounts = kept
-        saveAccounts()
     }
 
     private func save(_ next: UsageSharing) {
@@ -481,7 +483,6 @@ final class UsagePoolController: ObservableObject {
         }
         guard next != sharing else { return }
         persist(next)
-        forgetUnusedAccounts()
     }
 
     // MARK: - Names

@@ -124,6 +124,7 @@ struct RoutingAccountActions: View {
     @EnvironmentObject private var store: ShortcutStore
     @ObservedObject private var pool = Shared.usagePool
     @ObservedObject private var signIn = Shared.accountSignIn
+    @State private var forget: PoolAccount?
     private var lenders: [String] { pool.lenders(of: claude) }
 
     /// Other Claudes and accounts already signed in elsewhere, then a new one.
@@ -147,12 +148,30 @@ struct RoutingAccountActions: View {
             if !candidates.isEmpty { Divider() }
             Button("Sign In to Another Account…") { signIn.start(for: claude, interactive: true) }
                 .disabled(isSigningIn)
+            if !pool.unusedSavedAccounts.isEmpty {
+                Divider()
+                Menu("Forget a saved sign-in…") {
+                    ForEach(pool.unusedSavedAccounts, id: \.id) { account in
+                        Button(pool.name(of: account.id)) { forget = account }
+                    }
+                }
+            }
         } label: {
-            Label(lenders.isEmpty ? "Add an Account" : "Add Another Account", systemImage: "plus")
+            Label("Add backup", systemImage: "plus")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .controlSize(.small)
         .fixedSize()
+        .help("Choose an account to use when the main account reaches its limit.")
         .identified("shared-usage.add")
+        .alert("Forget this saved sign-in?", isPresented: Binding(
+            get: { forget != nil }, set: { if !$0 { forget = nil } }
+        ), presenting: forget) { account in
+            Button("Forget sign-in", role: .destructive) { pool.forgetUnusedAccount(account.id) }
+            Button("Cancel", role: .cancel) { }
+        } message: { account in
+            Text(L10n.format("AI Switcher will forget %@. You can sign in again later.", pool.name(of: account.id)))
+        }
     }
 
     /// A sign-in under way, or one that failed, stands where Add is while it

@@ -6,11 +6,14 @@ You can eject the disk image after the copy finishes.
 Already using Graft?
 Keep Graft running. In AI Switcher’s Settings, turn on “Use my existing Graft
 setup”, then quit and reopen AI Switcher. Choose Claude Code to see your
-accounts and the last reply. Claude can keep using its saved connection.
+accounts and the last reply. Give the accounts nicknames in AI Switcher.
+Use “Manage in Graft” to add a backup or change where a chat goes.
+Claude keeps using its saved connection.
 
 New to AI Switcher?
-Choose Claude Code to add a backup, or ChatGPT & Codex to open a new window
-with the account you pick.
+Choose Claude Code to add a backup. For ChatGPT or Codex, choose ChatGPT &
+Codex, pick “Add account” and name it. To use another Codex account on the
+same project, select that account and choose “Use same folder”.
 
 AI Switcher runs on macOS 13 or later. Automatic Claude Code switching
 requires Claude Desktop and macOS 15 or later.

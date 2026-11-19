@@ -54,7 +54,7 @@ func capture(_ name: String, dark: Bool, compact: Bool, movie: Bool = false, ope
     let controller = NSHostingController(rootView: content)
     controller.sizingOptions = []
     if #available(macOS 14, *) { controller.sceneBridgingOptions = .all }
-    let size = NSSize(width: compact ? 780 : 1000, height: compact ? 550 : 756)
+    let size = NSSize(width: compact ? 780 : 1000, height: compact ? 550 : 820)
     let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
@@ -107,6 +107,19 @@ func capture(_ name: String, dark: Bool, compact: Bool, movie: Bool = false, ope
         print(url.path)
     }
 }
+
+// Rotation is ambient. A moving dot represents a real attempt or a just-observed reply.
+let tick = Date(timeIntervalSinceReferenceDate: 64)
+let idle = OrbitFrame(at: tick, moving: true, signal: nil, traceBegan: nil)
+let quarterTurn = OrbitFrame(at: tick.addingTimeInterval(8), moving: true, signal: nil, traceBegan: nil)
+precondition(abs(quarterTurn.angle - idle.angle - .pi / 2) < 0.0001 && idle.pulse == nil && quarterTurn.pulse == nil)
+let sending = RouteMapSignal(phase: .sending, backup: true, model: "Fable 5.2", at: tick)
+let midRequest = OrbitFrame(at: tick.addingTimeInterval(1.2), moving: true, signal: sending, traceBegan: nil)
+precondition(abs((midRequest.pulse ?? -1) - 0.5) < 0.0001)
+let still = OrbitFrame(at: tick.addingTimeInterval(8), moving: false, signal: sending, traceBegan: nil)
+precondition(still.angle == 0 && still.pulse == nil)
+let answered = RouteMapSignal(phase: .answered, backup: true, model: nil, at: tick)
+precondition(OrbitFrame(at: tick.addingTimeInterval(8), moving: true, signal: answered, traceBegan: nil).pulse == nil)
 
 precondition(RoutingDashboard.modelName("claude-fable-5-2") == "Fable 5.2")
 precondition(RoutingDashboard.modelName("custom-model") == "custom-model")

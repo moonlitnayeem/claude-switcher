@@ -32,6 +32,9 @@ let layoutSession: URLSession = {
     return URLSession(configuration: configuration)
 }()
 let fm = FileManager.default
+let layoutDomain = "ai-switcher-layout-" + UUID().uuidString
+let layoutDefaults = UserDefaults(suiteName: layoutDomain)!
+defer { layoutDefaults.removePersistentDomain(forName: layoutDomain) }
 let temporary = fm.temporaryDirectory.appending(path: "switcher-layout-\(UUID().uuidString)")
 try fm.createDirectory(at: temporary, withIntermediateDirectories: true)
 defer { try? fm.removeItem(at: temporary) }
@@ -364,6 +367,7 @@ for appearance in [NSAppearance.Name.aqua, .darkAqua] {
 for page in pages {
     let root = ContentView(selection: page.selection, artifacts: pageArtifacts, projects: pageProjects,
                            routingPreview: AnyView(DemoDashboard(empty: false)))
+        .defaultAppStorage(layoutDefaults)
         .environmentObject(Shared.store)
         .environmentObject(Shared.settings)
         .environmentObject(Shared.usage)
@@ -478,6 +482,16 @@ for page in pages {
                     check(tree.contains { $0.name == L10n.text("Account map")
                             && $0.value == L10n.text("Sending to your backup") },
                           "\(place): the account map announces the current route")
+                    for (id, title) in [
+                        ("rename.personal", L10n.format("Rename label for %@", "alex@example.com")),
+                        ("rename.studio", L10n.format("Rename label for %@", "studio@example.org")),
+                        ("remove.studio", L10n.format("Remove %@ as a backup", "studio@example.org")),
+                    ] {
+                        check(element("window.routing.\(id)", in: tree)?.name == title,
+                              "\(place): \(id) names the affected account")
+                    }
+                    check(element("window.routing.remove.personal", in: tree) == nil,
+                          "\(place): only backups can be removed")
                     for control in ["sidebar.routing", "sidebar.openai", "routing.dashboard", "routing.automatic", "shared-usage.add", "routing.settings"] {
                         check(element("window.\(control)", in: tree) != nil,
                               "\(place): dashboard control \(control) is accessible")
@@ -485,7 +499,7 @@ for page in pages {
                 }
                 if page.selection == ContentView.openAIID {
                     for (control, title) in [
-                        ("rename", "Rename selected account"), ("slot.first", "Account 1"),
+                        ("add", "Add account"), ("rename", "Rename selected account"), ("slot.first", "Account 1"),
                         ("slot.second", "Account 2"), ("chat", "Open ChatGPT"), ("codex", "Open Codex…"),
                         ("usual-browser", "Use my usual browser"),
                     ] {
@@ -669,10 +683,39 @@ func hosted<V: View>(_ view: V, title: String) -> NSWindow {
     return window
 }
 
-// Graft's folder is absent in this fixture, as it can be before the relay starts.
+// At the minimum window width the sidebar leaves about 550 points for the detail.
+do {
+    let domain = "ai-switcher-account-layout-" + UUID().uuidString
+    let defaults = UserDefaults(suiteName: domain)!
+    defer { defaults.removePersistentDomain(forName: domain) }
+    var index = OpenAIProfileIndex(legacyFirst: "Personal", legacySecond: "Studio", legacySelection: "first")
+    for n in 3...9 { index.add("Team account \(n)") }
+    index.setRemoved(true, .second)
+    defaults.set(try JSONEncoder().encode(index), forKey: "openai.profileIndex")
+    defaults.set(temporary.path, forKey: "openai.lastProject")
+
+    let compact = hosted(OpenAIAccountsView().frame(width: 540, height: 520)
+        .defaultAppStorage(defaults).environment(\.controlSurface, ControlSurface.window),
+        title: "Many accounts at compact width")
+    let tree = checkAccessibility(compact, surface: ControlSurface.window, "many OpenAI accounts at compact width")
+    for control in ["picker", "rename", "add", "options", "restore", "chat", "codex", "same-folder"] {
+        check(element("window.openai.\(control)", in: tree) != nil,
+              "compact OpenAI profiles expose their \(control) control")
+    }
+    check(element("window.openai.same-folder", in: tree)?.name == OpenAICopy.text("Use same folder"),
+          "a different account can open the same local project in a new session")
+    check(tree.contains { [$0.name, $0.value].contains("Team account 9") },
+          "the popup identifies the current account in a long list")
+    compact.orderOut(nil)
+}
+
+// Saved assignments stay visible before the fixture's relay starts.
+let savedGraft = temporary.appending(path: Graft.legacyFolderName)
+try fm.createDirectory(at: savedGraft, withIntermediateDirectories: true)
+try Data(#"{"lenders":{"main":["studio"]}}"#.utf8).write(to: savedGraft.appending(path: "usage-sharing.json"))
 do {
     let managed = hosted(GraftConnectionView().frame(width: 740, height: 680)
-        .environment(\.controlSurface, ControlSurface.window), title: "Existing Graft connection")
+        .defaultAppStorage(layoutDefaults).environment(\.controlSurface, ControlSurface.window), title: "Existing Graft connection")
     let tree = checkAccessibility(managed, surface: ControlSurface.window, "existing Graft connection")
     check(element("window.routing.manage-graft", in: tree)?.name == L10n.text("Manage in Graft"),
           "the existing connection offers its own account manager")
@@ -681,7 +724,27 @@ do {
           "the existing connection displays Graft's switching status without a second switch")
     check(tree.contains { [$0.name, $0.value].contains(L10n.text("Waiting for Graft")) },
           "an unavailable Graft relay is shown as disconnected")
+    check(element("window.routing.rename.main", in: tree)?.role == kAXButtonRole
+            && element("window.routing.rename.studio", in: tree)?.role == kAXButtonRole,
+          "the main and backup account labels can be edited from the Graft map")
+    check(element("window.routing.remove.studio", in: tree) == nil
+            && element("window.shared-usage.add", in: tree) == nil,
+          "Graft retains control of its assignments")
     managed.orderOut(nil)
+}
+
+do {
+    let labels = ClaudeAccountLabels(scope: "layout", defaults: layoutDefaults)
+    labels.set("My studio", for: "studio")
+    let editor = hosted(ClaudeAccountLabelEditor(id: "studio", accountName: "studio@example.org", labels: labels)
+        .environment(\.controlSurface, ControlSurface.window), title: "Edit an account nickname")
+    let tree = checkAccessibility(editor, surface: ControlSurface.window, "account nickname editor")
+    let title = Bundle.main.localizedString(forKey: "Save label", value: nil, table: "AccountLabels")
+    check(element("window.routing.nickname.field", in: tree)?.value == "My studio",
+          "the nickname editor starts with the saved local label")
+    check(element("window.routing.nickname.save", in: tree)?.name == title,
+          "the nickname editor offers a localized Save action")
+    editor.orderOut(nil)
 }
 
 let dropdown = hosted(MenuBarContent(openMainWindow: {})
@@ -803,10 +866,6 @@ check(element("dropdown.conversation.first-session", in: foldedTree) != nil
       "the conversation in front comes first, and the rest wait behind a count until asked for")
 folded.orderOut(nil)
 
-// A previously configured Graft setup exposes the opt-in without touching Claude.
-let savedGraft = temporary.appending(path: Graft.legacyFolderName)
-try fm.createDirectory(at: savedGraft, withIntermediateDirectories: true)
-try Data(#"{"lenders":{}}"#.utf8).write(to: savedGraft.appending(path: "usage-sharing.json"))
 // Sized by its content, as the Settings scene sizes its window.
 let settingsController = NSHostingController(rootView: SettingsView().environmentObject(Shared.settings))
 let settingsWindow = LayoutWindow(contentViewController: settingsController)

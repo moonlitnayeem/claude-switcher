@@ -12,6 +12,7 @@ struct RoutingAccountDisplay: Identifiable {
     var fableReset: Date?
     var canRecheck = false
     var recheckPending = false
+    var nickname: String? = nil
 }
 
 struct RoutingDisplay {
@@ -33,6 +34,8 @@ struct RoutingDashboard: View {
     @EnvironmentObject private var usage: UsageMonitor
     @ObservedObject private var pool = Shared.usagePool
     @State private var profile = UsagePoolController.mainKey
+    @ObservedObject private var labels = ClaudeAccountLabels.standalone
+    @State private var editingLabel: ClaudeLabelTarget?
 
     private var profiles: [String] {
         [UsagePoolController.mainKey] + store.shortcuts.filter { !store.isDraft($0) }.map(UsagePoolController.key)
@@ -44,7 +47,9 @@ struct RoutingDashboard: View {
         RoutingPanel(data: display(for: key), enabled: Binding(
             get: { pool.automaticSwitchingEnabled(for: key) },
             set: { pool.setAutomaticSwitching($0, for: key) }
-        ), canSwitch: UsagePoolController.isSupported, recheck: pool.recheckFable) {
+        ), canSwitch: UsagePoolController.isSupported, recheck: pool.recheckFable,
+                     removeBackup: { pool.removeLender($0, from: key) },
+                     renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) }) {
             if profiles.count > 1 {
                 Picker("Profile", selection: Binding(get: { key }, set: { profile = $0 })) {
                     ForEach(profiles, id: \.self) { item in Text(pool.name(of: item)).tag(item) }
@@ -63,6 +68,9 @@ struct RoutingDashboard: View {
             }
             Button("Profile settings") { manage(key) }
                 .identified("routing.settings")
+        }
+        .sheet(item: $editingLabel) { item in
+            ClaudeAccountLabelEditor(id: item.id, accountName: item.name, labels: labels)
         }
         .onAppear { pool.watch() }
         .onDisappear { pool.unwatch() }
@@ -184,6 +192,7 @@ struct RoutingDashboard: View {
                 && pool.automaticSwitchingEnabled(for: primary)
             row.recheckPending = report?.fableRecheckPending == true || pool.sendingFableRechecks.contains(id)
         }
+        row.nickname = labels.nickname(for: id)
         row.state = L10n.text(row.state)
         return row
     }
@@ -224,6 +233,8 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     @Binding var enabled: Bool
     let canSwitch: Bool
     let recheck: (String) -> Void
+    var removeBackup: ((String) -> Void)? = nil
+    var renameAccount: ((String) -> Void)? = nil
     @ViewBuilder let profile: () -> Profile
     @ViewBuilder let accountActions: () -> AccountActions
     @ViewBuilder let manage: () -> Manage
@@ -298,8 +309,12 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                 .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.name).font(.system(size: 14, weight: .semibold)).lineLimit(2)
+                Text(item.nickname ?? item.name).font(.system(size: 14, weight: .semibold)).lineLimit(2)
                     .truncationMode(.middle).textSelection(.enabled)
+                if item.nickname != nil {
+                    Text(item.name).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+                }
                 HStack(spacing: 5) {
                     Text(L10n.text(item.isPrimary ? "Main" : "Backup"))
                     Text("·").accessibilityHidden(true)
@@ -321,12 +336,35 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                         }
                     }.padding(.top, 2)
                 }
+                if renameAccount != nil || (!item.isPrimary && removeBackup != nil) {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 14) { rowActions(item) }
+                        VStack(alignment: .leading, spacing: 5) { rowActions(item) }
+                    }.padding(.top, 3)
+                }
             }
             Spacer(minLength: 2)
             if !compact { weekly(item).padding(.top, 1) }
         }
         .padding(.horizontal, 15).padding(.vertical, 12)
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private func rowActions(_ item: RoutingAccountDisplay) -> some View {
+        if let renameAccount {
+            Button("Rename label") { renameAccount(item.id) }
+                .accessibilityLabel(L10n.format("Rename label for %@", item.name))
+                .help("Give this account a name in AI Switcher.")
+                .identified("routing.rename.\(item.id)")
+                .font(.caption).buttonStyle(RoutingTextButtonStyle(color: accent))
+        }
+        if !item.isPrimary, let removeBackup {
+            Button("Remove backup") { removeBackup(item.id) }
+                .accessibilityLabel(L10n.format("Remove %@ as a backup", item.name))
+                .help("Stop using this backup for this profile. Its sign-in stays saved.")
+                .identified("routing.remove.\(item.id)")
+                .font(.caption).buttonStyle(RoutingTextButtonStyle(color: accent))
+        }
     }
 
     @ViewBuilder private func weekly(_ item: RoutingAccountDisplay) -> some View {

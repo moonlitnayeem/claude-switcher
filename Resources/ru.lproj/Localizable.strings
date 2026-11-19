@@ -669,3 +669,16 @@
 "Your backup answered" = "Ответил резервный аккаунт";
 "Your main account is full. This chat has a saved backup choice in Graft." = "Основной аккаунт исчерпал лимит. Для этого чата в Graft выбран резервный аккаунт.";
 "This chat is set to use its backup account in Graft." = "Для этого чата в Graft выбран резервный аккаунт.";
+
+"Add backup" = "Добавить резервный аккаунт";
+"Choose an account to use when the main account reaches its limit." = "Выберите аккаунт, который будет отвечать, когда основной достигнет лимита.";
+"Forget a saved sign-in…" = "Забыть сохранённый вход…";
+"Forget this saved sign-in?" = "Забыть этот сохранённый вход?";
+"Forget sign-in" = "Забыть вход";
+"AI Switcher will forget %@. You can sign in again later." = "AI Switcher забудет вход в %@. Позже вы сможете войти снова.";
+"Rename label" = "Изменить название";
+"Rename label for %@" = "Изменить название для %@";
+"Give this account a name in AI Switcher." = "Задайте имя для этого аккаунта в AI Switcher.";
+"Remove backup" = "Убрать из резервных";
+"Remove %@ as a backup" = "Убрать %@ из резервных";
+"Stop using this backup for this profile. Its sign-in stays saved." = "Убрать резервный аккаунт из этого профиля. Вход останется сохранённым.";

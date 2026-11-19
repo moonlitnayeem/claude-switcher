@@ -102,28 +102,43 @@ struct RoutingOrbitCard: View {
     }
 }
 
+struct OrbitFrame {
+    let angle: Double
+    let pulse: Double?
+
+    init(at date: Date, moving: Bool, signal: RouteMapSignal?, traceBegan: Date?) {
+        guard moving else { angle = 0; pulse = nil; return }
+        let turn = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 32) / 32
+        angle = turn * 2 * .pi
+        if let signal, signal.phase == .sending {
+            pulse = max(0, date.timeIntervalSince(signal.at)).truncatingRemainder(dividingBy: 2.4) / 2.4
+        } else if signal?.phase == .answered, let began = traceBegan {
+            pulse = min(1, max(0, date.timeIntervalSince(began) / 1.5))
+        } else {
+            pulse = nil
+        }
+    }
+}
+
 /// Only actual attempts animate along a branch. A request that completed between polls gets a brief, labeled trace.
 private struct OrbitMap: View {
     let signal: RouteMapSignal?
     let hasBackup: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var traceBegan: Date?
+    @State private var windowVisible = false
+    @State private var onScreen = true
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: reduceMotion || (signal?.phase != .sending && traceBegan == nil))) { timeline in
+        let moving = windowVisible && onScreen && !reduceMotion
+        let showingTraffic = signal?.phase == .sending || traceBegan != nil
+        let map = TimelineView(.animation(minimumInterval: showingTraffic ? 1 / 24 : 1 / 15, paused: !moving)) { timeline in
             Canvas { context, size in
-                let clock = timeline.date.timeIntervalSinceReferenceDate
-                var pulse: Double?
-                if !reduceMotion, let signal {
-                    if signal.phase == .sending {
-                        pulse = max(0, timeline.date.timeIntervalSince(signal.at)).truncatingRemainder(dividingBy: 2.4) / 2.4
-                    } else if let began = traceBegan {
-                        pulse = min(1, max(0, timeline.date.timeIntervalSince(began) / 1.5))
-                    }
-                }
-                draw(context: context, size: size, pulse: pulse, angle: pulse == nil ? 0 : sin(clock * 0.22) * 0.12)
+                let frame = OrbitFrame(at: timeline.date, moving: moving, signal: signal, traceBegan: traceBegan)
+                draw(context: context, size: size, pulse: frame.pulse, angle: frame.angle)
             }
         }
+        .background(OrbitWindowVisibility { windowVisible = $0 })
         .task(id: signal) {
             traceBegan = nil
             guard !reduceMotion, let signal, signal.phase == .answered,
@@ -131,6 +146,11 @@ private struct OrbitMap: View {
             traceBegan = Date()
             try? await Task.sleep(nanoseconds: 1_550_000_000)
             if !Task.isCancelled { traceBegan = nil }
+        }
+        if #available(macOS 15, *) {
+            map.onScrollVisibilityChange(threshold: 0.01) { onScreen = $0 }
+        } else {
+            map
         }
     }
 
@@ -273,6 +293,40 @@ private struct OrbitMap: View {
         func point(_ t: Double) -> CGPoint {
             let u = 1-t, aa = u*u*u, bb = 3*u*u*t, cc = 3*u*t*t, dd = t*t*t
             return CGPoint(x: a.x*aa+b.x*bb+c.x*cc+d.x*dd, y: a.y*aa+b.y*bb+c.y*cc+d.y*dd)
+        }
+    }
+}
+
+/// Window occlusion includes a minimized or covered window, even if the app still has another window open.
+private struct OrbitWindowVisibility: NSViewRepresentable {
+    let changed: (Bool) -> Void
+
+    func makeNSView(context: Context) -> Probe {
+        let view = Probe()
+        view.changed = changed
+        return view
+    }
+
+    func updateNSView(_ view: Probe, context: Context) { view.changed = changed }
+
+    final class Probe: NSView {
+        var changed: ((Bool) -> Void)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
+            if let window {
+                NotificationCenter.default.addObserver(self, selector: #selector(reportVisibility),
+                                                       name: NSWindow.didChangeOcclusionStateNotification, object: window)
+            }
+            reportVisibility()
+        }
+
+        @objc private func reportVisibility() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                changed?(window?.occlusionState.contains(.visible) == true)
+            }
         }
     }
 }

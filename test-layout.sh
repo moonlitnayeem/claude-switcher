@@ -43,6 +43,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 for localization in "$ROOT"/Resources/*.lproj; do
     ditto "$localization" "$APP/Contents/Resources/$(basename "$localization")"
 done

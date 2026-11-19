@@ -4,6 +4,8 @@ import SwiftUI
 
 struct GraftConnectionView: View {
     private let connection = GraftConnection()
+    @ObservedObject private var labels = ClaudeAccountLabels.graft
+    @State private var labelTarget: ClaudeLabelTarget?
     @State private var snapshot = GraftConnection.Snapshot()
     @State private var loaded = false
     @State private var profile = "main"
@@ -15,7 +17,8 @@ struct GraftConnectionView: View {
         let status = snapshot.status
         let enabled = status?.configured == true && status?.enabled == true && !(snapshot.lenders[key] ?? []).isEmpty
         RoutingPanel(data: display(profile: key), enabled: .constant(enabled), canSwitch: false,
-                     recheck: { member in recheck(member, profile: key) }) {
+                     recheck: { member in recheck(member, profile: key) },
+                     renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) }) {
             if snapshot.profiles.count > 1 {
                 Picker("Claude profile", selection: Binding(get: { key }, set: { profile = $0 })) {
                     ForEach(snapshot.profiles, id: \.self) { id in Text(profileName(id)).tag(id) }
@@ -35,6 +38,9 @@ struct GraftConnectionView: View {
                 loaded = true
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
             }
+        }
+        .sheet(item: $labelTarget) { target in
+            ClaudeAccountLabelEditor(id: target.id, accountName: target.name, labels: labels)
         }
         .alert("Graft connection", isPresented: Binding(get: { message != nil },
                                                         set: { if !$0 { message = nil } })) {
@@ -74,6 +80,7 @@ struct GraftConnectionView: View {
             else { state = "Saved in Graft" }
             var row = RoutingAccountDisplay(id: id, name: name, isPrimary: id == profile,
                                             state: L10n.text(state), weeklyUsed: week)
+            row.nickname = labels.nickname(for: id)
             row.needsAttention = report?.tokenRefused == true || week == 100
             if let reset = limits?.fableRefusedUntil, reset > now { row.fableReset = reset }
             row.canRecheck = !rechecking && snapshot.canRecheck(id, from: profile)

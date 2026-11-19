@@ -6106,10 +6106,20 @@ do {
           "a signed-in account goes by its address, Claude's own profile by its name")
     pool.add(account("account:a", uuid: "a", sealed: "third"), to: "elsewhere")
     pool.removeLender("account:a", from: main)
-    check(pool.accounts.count == 1, "an account another Claude still draws on is kept")
+    pool.forgetUnusedAccount("account:a")
+    check(pool.accounts.count == 1 && pool.unusedSavedAccounts.isEmpty,
+          "an account in use by another profile cannot be forgotten")
     pool.removeLender("account:a", from: "elsewhere")
+    let detached = UsagePoolController()
+    check(detached.lenders(of: "elsewhere").isEmpty && detached.unusedSavedAccounts.first?.sealed == "third",
+          "removing the last backup assignment keeps its saved sign-in available after restart")
+    pool.addLender("account:a", to: main)
+    check(pool.lenders(of: main) == ["account:a"] && pool.unusedSavedAccounts.isEmpty,
+          "adding a saved backup restores the assignment without a new browser sign-in")
+    pool.removeLender("account:a", from: main)
+    pool.forgetUnusedAccount("account:a")
     check(pool.accounts.isEmpty && UsagePoolController().accounts.isEmpty,
-          "and goes, login and all, when nothing draws on it any more")
+          "forgetting an unused sign-in explicitly removes its saved copy")
 
     try? fm.createDirectory(at: Graft.mainProfile, withIntermediateDirectories: true)
     let mainConfig = Graft.mainProfile.appending(path: "config.json")

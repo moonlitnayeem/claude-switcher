@@ -15,7 +15,6 @@
 "Pick a project folder to start Codex in Terminal. Sign in with this account the first time." = "Выберите папку проекта, чтобы открыть Codex в Терминале. При первом запуске войдите в нужный аккаунт.";
 "Open Codex…" = "Открыть Codex…";
 "Get Codex" = "Скачать Codex";
-"Your choice applies to the next window. Open chats and tasks stay with their own account." = "Выбор действует для нового окна. Открытые чаты и задачи остаются в своих аккаунтах.";
 "Account name" = "Название аккаунта";
 "Name" = "Название";
 "Cancel" = "Отмена";
@@ -27,3 +26,19 @@
 "Open Codex" = "Открыть Codex";
 "Opened Terminal for %@." = "Терминал открыт для аккаунта «%@».";
 "Use the same email when you sign in to ChatGPT and Codex for this name." = "Входите в ChatGPT и Codex для этого имени с одним и тем же адресом почты.";
+"Account %lld" = "Аккаунт %lld";
+"Add account" = "Добавить аккаунт";
+"Your saved account list could not be read." = "Не удалось прочитать сохранённый список аккаунтов.";
+"Use same folder" = "Открыть ту же папку";
+"This project folder moved. Choose it again with Open Codex." = "Папка проекта перемещена. Нажмите «Открыть Codex» и выберите её снова.";
+"Switch inside a ChatGPT tab using its profile menu. Chats stay with their account. In Codex, a new session can work on the same files." = "В одной вкладке ChatGPT можно переключиться через меню профиля. Чаты остаются в своём аккаунте. Новый сеанс Codex может работать с теми же файлами.";
+"Use a different name, up to 48 characters." = "Выберите другое название длиной до 48 символов.";
+"Remove this account from the list?" = "Убрать аккаунт из списка?";
+"Remove" = "Убрать";
+"Remove from list…" = "Убрать из списка…";
+"You can restore %@ with its sign-ins from Removed accounts." = "Аккаунт «%@» с сохранённым входом можно вернуть из списка «Убранные аккаунты».";
+"Account options" = "Действия с аккаунтом";
+"Selected account" = "Выбранный аккаунт";
+"Add an account to open ChatGPT or Codex." = "Добавьте аккаунт, чтобы открыть ChatGPT или Codex.";
+"Removed accounts" = "Убранные аккаунты";
+"Restore %@" = "Вернуть «%@»";

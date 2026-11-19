@@ -73,4 +73,44 @@ try fm.createSymbolicLink(at: relocated, withDestinationURL: scratch)
 var rejected = false
 do { _ = try OpenAIProfileLauncher(root: relocated).chatArguments(for: .first) } catch { rejected = true }
 check(rejected, "a symbolic link cannot substitute another user's profile folder")
+var index = OpenAIProfileIndex(legacyFirst: "Home", legacySecond: "Studio", legacySelection: "second")
+check(index.available.map(\.displayName) == ["Home", "Studio"] && index.selectedID == .second,
+      "the upgrade keeps the original sign-ins, names and selected account")
+check(try manager.chatArguments(for: index.available[0].id) == a && manager.chatArguments(for: index.available[1].id) == b,
+      "upgrading uses the original browser directories for both accounts")
+for number in 3...32 { index.add("Profile \(number)") }
+check(index.available.count == 32 && Set(index.available.map(\.id)).count == 32,
+      "people can keep adding independently identified accounts")
+let third = index.available[2]
+let thirdChat = try manager.chatArguments(for: third.id)
+let thirdCodex = try manager.directory(third.id, component: "Codex")
+check(thirdChat != a && thirdChat != b && thirdCodex.path.contains(third.id.rawValue),
+      "an added account has its own persistent browser and Codex directories")
+let sameProject = try manager.codexCommand(for: third.id, executable: fake, project: firstProject)
+check(try run(sameProject) == 0 && log(third.id) == ["login", firstPath],
+      "an additional account can work directly on the same local project files in its own session")
+index.rename(third.id, to: "  School  ")
+let renamedChat = try manager.chatArguments(for: third.id)
+check(index.available[2].displayName == "School" && renamedChat == thirdChat,
+      "renaming keeps the established account’s sign-in locations")
+index.add("SCHOOL")
+check(index.available.count == 32 && !index.canUse(" ") && !index.canUse(String(repeating: "x", count: 49)),
+      "duplicate, empty and oversized account names cannot be added")
+index.select(third.id)
+index.setRemoved(true, third.id)
+check(index.available.count == 31 && index.selectedID == .first && index.removed.first?.id == third.id,
+      "removing a selected name chooses another visible account")
+let replay = try JSONDecoder().decode(OpenAIProfileIndex.self, from: JSONEncoder().encode(index))
+check(replay == index, "selection, names and removed accounts survive relaunch")
+index.setRemoved(false, third.id)
+let restoredChat = try manager.chatArguments(for: third.id)
+check(index.selectedID == third.id && index.selected?.label == "School" && restoredChat == thirdChat,
+      "restoring a name restores its sign-ins and selects that account")
+for profile in index.available { index.setRemoved(true, profile.id) }
+check(index.selected == nil && index.available.isEmpty, "removing the final account leaves an empty list")
+index.add("New")
+check(index.selected?.label == "New" && index.removed.count == 32, "adding works after the last removal and preserves other sign-ins")
+check(OpenAIAccountSlot(rawValue: "../other") == nil
+        && (try? JSONDecoder().decode(OpenAIAccountSlot.self, from: Data(#""../other""#.utf8))) == nil,
+      "persisted account IDs cannot point outside a profile directory")
 print("\(checks) account profile checks passed")

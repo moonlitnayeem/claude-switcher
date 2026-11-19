@@ -1,10 +1,84 @@
 import AppKit
 import Foundation
 
-enum OpenAIAccountSlot: String, CaseIterable, Identifiable {
-    case first, second
+/// IDs also name private profile directories. The first release used "first" and "second".
+struct OpenAIAccountSlot: RawRepresentable, Codable, Hashable, Identifiable {
+    let rawValue: String
     var id: Self { self }
-    var title: String { self == .first ? OpenAICopy.text("Account 1") : OpenAICopy.text("Account 2") }
+    static let first = OpenAIAccountSlot(rawValue: "first")!
+    static let second = OpenAIAccountSlot(rawValue: "second")!
+
+    init() { rawValue = UUID().uuidString.lowercased() }
+
+    init?(rawValue: String) {
+        guard rawValue == "first" || rawValue == "second"
+                || UUID(uuidString: rawValue)?.uuidString.lowercased() == rawValue else { return nil }
+        self.rawValue = rawValue
+    }
+}
+
+struct OpenAIProfileIndex: Codable, Equatable {
+    struct Profile: Codable, Equatable, Identifiable {
+        let id: OpenAIAccountSlot
+        var label: String
+        var removed = false
+
+        var displayName: String {
+            if !label.isEmpty { return label }
+            return OpenAICopy.text(id == .second ? "Account 2" : "Account 1")
+        }
+    }
+
+    private(set) var profiles: [Profile]
+    private(set) var selectedID: OpenAIAccountSlot?
+    var available: [Profile] { profiles.filter { !$0.removed } }
+    var removed: [Profile] { profiles.filter(\.removed) }
+    var selected: Profile? { available.first { $0.id == selectedID } }
+
+    init(legacyFirst: String, legacySecond: String, legacySelection: String) {
+        profiles = [.init(id: .first, label: legacyFirst), .init(id: .second, label: legacySecond)]
+        selectedID = legacySelection == "second" ? .second : .first
+    }
+
+    func canUse(_ label: String, for id: OpenAIAccountSlot? = nil) -> Bool {
+        let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !clean.isEmpty && clean.count <= 48 && !profiles.contains {
+            $0.id != id && $0.displayName.localizedCaseInsensitiveCompare(clean) == .orderedSame
+        }
+    }
+
+    mutating func add(_ label: String) {
+        guard canUse(label) else { return }
+        let slot = OpenAIAccountSlot()
+        profiles.append(Profile(id: slot, label: label.trimmingCharacters(in: .whitespacesAndNewlines)))
+        selectedID = slot
+    }
+
+    mutating func rename(_ id: OpenAIAccountSlot, to label: String) {
+        guard canUse(label, for: id), let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        profiles[index].label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    mutating func select(_ id: OpenAIAccountSlot) {
+        if available.contains(where: { $0.id == id }) { selectedID = id }
+    }
+
+    mutating func setRemoved(_ removed: Bool, _ id: OpenAIAccountSlot) {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
+        profiles[index].removed = removed
+        if !removed { selectedID = id }
+        else if selectedID == id { selectedID = available.first?.id }
+    }
+
+    func nextName() -> String {
+        var number = profiles.count + 1
+        var proposed = String(format: OpenAICopy.text("Account %lld"), Int64(number))
+        while !canUse(proposed) {
+            number += 1
+            proposed = String(format: OpenAICopy.text("Account %lld"), Int64(number))
+        }
+        return proposed
+    }
 }
 
 enum OpenAICopy {

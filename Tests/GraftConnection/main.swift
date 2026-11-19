@@ -32,3 +32,20 @@ precondition(GraftAccountLabel.assigned(in: root, ids: ["backup"]).isEmpty)
 try FileManager.default.removeItem(at: inventory)
 precondition(GraftAccountLabel.assigned(in: root, ids: ["backup"]).isEmpty)
 print("Only assigned email labels are returned and stale labels disappear after a missing or damaged inventory")
+
+// The same local identifier can refer to different accounts in the two routing modes.
+let domain = "ai-switcher-fixture." + UUID().uuidString
+let prefs = UserDefaults(suiteName: domain)!
+defer { prefs.removePersistentDomain(forName: domain) }
+let labels = ClaudeAccountLabels(scope: "graft", defaults: prefs)
+let standalone = ClaudeAccountLabels(scope: "standalone", defaults: prefs)
+labels.set("  School  ", for: "main")
+standalone.set("Work", for: "main")
+precondition(labels.nickname(for: "main") == "School" && standalone.nickname(for: "main") == "Work")
+precondition(ClaudeAccountLabels(scope: "graft", defaults: prefs).nickname(for: "main") == "School")
+labels.set(String(repeating: "x", count: 65), for: "main")
+labels.set("multi\nline", for: "main")
+precondition(labels.nickname(for: "main") == "School")
+labels.set("  ", for: "main")
+precondition(ClaudeAccountLabels(scope: "graft", defaults: prefs).nickname(for: "main") == nil)
+print("Local account labels survive relaunch, preserve the other mode, and clear without changing accounts")

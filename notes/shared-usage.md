@@ -270,6 +270,10 @@ the suite fails if `AccountSignIn` so much as names it. The browser hands its co
 a listener on `127.0.0.1` alone, checked against a `state` of its own and a PKCE
 verifier.
 
+Removing a backup in AI Switcher unlinks it from that Claude profile. Its
+saved sign-in remains available to choose again in Add backup. Once no profile
+uses a saved sign-in, the same menu lets its owner explicitly forget it.
+
 ## Which account answers
 
 **Only the sender and the accounts it names are asked,** one account counted

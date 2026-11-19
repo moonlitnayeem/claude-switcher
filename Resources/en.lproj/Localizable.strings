@@ -669,3 +669,16 @@
 "Your backup answered" = "Your backup answered";
 "Your main account is full. This chat has a saved backup choice in Graft." = "Your main account is full. This chat has a saved backup choice in Graft.";
 "This chat is set to use its backup account in Graft." = "This chat is set to use its backup account in Graft.";
+
+"Add backup" = "Add backup";
+"Choose an account to use when the main account reaches its limit." = "Choose an account to use when the main account reaches its limit.";
+"Forget a saved sign-in…" = "Forget a saved sign-in…";
+"Forget this saved sign-in?" = "Forget this saved sign-in?";
+"Forget sign-in" = "Forget sign-in";
+"AI Switcher will forget %@. You can sign in again later." = "AI Switcher will forget %@. You can sign in again later.";
+"Rename label" = "Rename label";
+"Rename label for %@" = "Rename label for %@";
+"Give this account a name in AI Switcher." = "Give this account a name in AI Switcher.";
+"Remove backup" = "Remove backup";
+"Remove %@ as a backup" = "Remove %@ as a backup";
+"Stop using this backup for this profile. Its sign-in stays saved." = "Stop using this backup for this profile. Its sign-in stays saved.";
