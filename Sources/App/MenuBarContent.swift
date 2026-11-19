@@ -7,7 +7,6 @@ struct MenuBarContent: View {
     @EnvironmentObject private var store: ShortcutStore
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var usage: UsageMonitor
-    @ObservedObject private var updater = Shared.updater
     @ObservedObject private var sessionRecords = Shared.sessionRecords
     @ObservedObject private var pool = Shared.usagePool
 
@@ -20,6 +19,19 @@ struct MenuBarContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 9) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.teal)
+                    .padding(6)
+                    .background(Color.teal.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                    .accessibilityHidden(true)
+                Text("Claude Switcher")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
             UpdateRecoveryNotice()
             ClaudeUpdateStatus(compact: true)
             Divider()
@@ -87,20 +99,6 @@ struct MenuBarContent: View {
                     .padding(.bottom, 8)
             }
 
-            if let version = updater.availableVersion {
-                Button { updater.install() } label: {
-                    Label(updater.isHolding ? L10n.format("Install Claude Graft %@", version)
-                                            : L10n.format("Claude Graft %@ is available", version),
-                          systemImage: "arrow.down.circle")
-                        .font(.callout)
-                }
-                .buttonStyle(.link)
-                .help("Installs it and restarts. Nothing is asked.")
-                .identified("graft-update")
-                .padding(.horizontal, 14)
-                .padding(.bottom, 8)
-            }
-
             // Each switch explains itself on hover, never underneath: a note
             // shown while a switch is on stays for as long as it is, and the
             // dropdown grew a paragraph for every one somebody had turned on.
@@ -113,9 +111,9 @@ struct MenuBarContent: View {
                     .identified("show-in-menu-bar")
                 FrontClaudeControl()
                 ManualUpdateControl()
-                HoldUpdatesControl()
             }
-            .toggleStyle(.checkbox)
+            .toggleStyle(.switch)
+            .controlSize(.small)
             .padding(.horizontal, 14)
 
             Divider().padding(.vertical, 6)
@@ -124,14 +122,10 @@ struct MenuBarContent: View {
                 MenuButton(usage.isRefreshing ? "Refreshing…" : "Refresh Usage", id: "refresh-usage") {
                     usage.refresh(store, interactive: true)
                 }
-                MenuButton(updater.canCheck ? "Check for Claude Graft Updates" : "Checking for Claude Graft Updates…",
-                           id: "check-graft-updates") {
-                    updater.checkForUpdates()
-                }
-                .disabled(!updater.canCheck)
-                MenuButton("Open Claude Graft", id: "open-window", action: openMainWindow)
-                MenuButton("Support Claude Graft…", id: "support") { Links.open(Links.support) }
-                MenuButton("Quit Claude Graft", id: "quit") { AppDelegate.quit() }
+                MenuButton("Download Updates…", id: "check-graft-updates") { Links.open(Links.releases) }
+                MenuButton("Open Claude Switcher", id: "open-window", action: openMainWindow)
+                MenuButton("Help and Support…", id: "support") { Links.open(Links.support) }
+                MenuButton("Quit Claude Switcher", id: "quit") { AppDelegate.quit() }
             }
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
@@ -478,19 +472,5 @@ struct FrontClaudeControl: View {
         .help("The menu bar shows which Claude you're using, beside that account's usage. The Dock can't: macOS calls every running Claude “Claude”.")
         .font(.callout)
         .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-/// Graft's own updates, beside the switch for Claude's. The two are separate on
-/// purpose: one holds back the app doing the reporting, the other every Claude.
-struct HoldUpdatesControl: View {
-    @EnvironmentObject private var settings: AppSettings
-
-    var body: some View {
-        Toggle("Hold Claude Graft updates", isOn: $settings.holdUpdates)
-            .help("Graft still checks every hour and says when a version is ready, in this menu and on its icon. Nothing downloads until you press Install.")
-            .identified("hold-updates")
-            .font(.callout)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }

@@ -107,7 +107,7 @@ enum SidebarSync {
         var error: String?
     }
 
-    private static var root: URL { Graft.applicationSupport.appending(path: "ClaudeGraft") }
+    private static var root: URL { Graft.graftFolder }
     private static let processLock = NSLock()
     private static var storageBlocked = false
     static var storageOverride: (([URL], [String: Snapshot]?, [String: Set<String>]) throws -> [String: Snapshot])?
@@ -361,7 +361,7 @@ enum SidebarSync {
         let cache = root.appending(path: "sidebar-runtime.noindex")
         let key = String(hash.prefix(20))
         let destination = cache.appending(path: "\(key)/Sidebar.app")
-        if Graft.exists(destination.appending(path: "Contents/Resources/graft-sidebar.json")),
+        if Graft.exists(destination.appending(path: "Contents/Resources/switcher-sidebar.json")),
            Graft.runTool("/usr/bin/codesign", ["--verify", "--strict", destination.path]) == 0 {
             pruneHelperCache(cache, keeping: key)
             return destination
@@ -387,12 +387,12 @@ enum SidebarSync {
                                 ("main.js", Data(SidebarStorage.script.utf8))])
         try archive.data.write(to: contents.appending(path: "Resources/app.asar"))
         let info: [String: Any] = ["CFBundleExecutable": "sidebar-storage", "CFBundleName": name,
-            "CFBundleDisplayName": "Claude Graft Sidebar", "CFBundleIdentifier": "graft.claude-graft.sidebar",
+            "CFBundleDisplayName": "Claude Switcher Sidebar", "CFBundleIdentifier": "com.moonlitnayeem.claude-switcher.sidebar",
             "CFBundleVersion": "1", "CFBundlePackageType": "APPL", "NSPrincipalClass": "AtomApplication",
             "LSUIElement": true, "ElectronAsarIntegrity": ["Resources/app.asar": ["algorithm": "SHA256", "hash": archive.hash]]]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             .write(to: contents.appending(path: "Info.plist"))
-        try Data(hash.utf8).write(to: contents.appending(path: "Resources/graft-sidebar.json"))
+        try Data(hash.utf8).write(to: contents.appending(path: "Resources/switcher-sidebar.json"))
         try sealIntegrity(of: app, headerHash: archive.hash)
         let entitlements = staging.appending(path: "entitlements.plist")
         try PropertyListSerialization.data(fromPropertyList: ["com.apple.security.cs.allow-jit": true], format: .xml, options: 0)

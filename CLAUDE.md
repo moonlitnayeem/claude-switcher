@@ -1,4 +1,4 @@
-# Working on Claude Graft
+# Working on Claude Switcher
 
 ## Style, first
 
@@ -33,48 +33,28 @@ situations look identical from inside the code, and the note is what says how
 to tell them apart. A new fact goes into the note it belongs to; a new rule gets
 one line here as well.
 
-## Testing that can end the session doing it
+## Development and verification
 
-Work on this app is done from inside a Claude that Graft itself manages, so a
-test that quits or relaunches Graft, swaps in a development build, opens, quits
-or brings forward a Claude, or installs an update can stop the session running
-it halfway through. Those are written up as a plan in `dist/<topic>/HANDOFF.md`
-and run from outside it: the exact steps, what each should show and where to
-check it, what must not be touched, how to put the installed Graft back, and a
-table for the results. `dist/` because it is ignored and `release.sh` clears
-only what it builds there; every `./build.sh` clears `build.noindex/`, which has
-already taken one plan and its results with it.
+Claude Switcher is the independent macOS fork at [moonlitnayeem/claude-switcher](https://github.com/moonlitnayeem/claude-switcher). The notes under `notes/` describe the original Graft implementation and its history. Use this fork’s code, tests, and package scripts for current behavior.
 
-Done in place is everything that cannot disturb a running Claude: the suite, the
-layout checks, builds, read-only runs over this machine's data, and sandboxes
-cloned from it. A plan never releases, commits or touches a chat. A keychain
-prompt it meets is answered by the person whose keychain it is.
+Keep development tests separate from anyone’s running conversation. Use isolated fixture profiles and the local stand-in relay service for routing checks. Opening, quitting or modifying a real Claude profile can interrupt its work. The dashboard render script substitutes fictional account data and a local update response.
 
-The development machine has Claude's own profile and one shortcut, Claude 2,
-grafted from it. A plan may bring forward a Claude that is already open; it
-opens and quits none.
+```sh
+./build.sh
+SWITCHER_UNIVERSAL=1 ./build.sh
+./test.sh
+./test-relay.sh
+./test-layout.sh
+Tools/render-dashboard.sh
+```
 
-## Commands
-
-    ./build.sh                     app + launcher into build.noindex/, this arch only
-    GRAFT_UNIVERSAL=1 ./build.sh   both arches, joined with lipo
-    ./test.sh                      the suite, all in a throwaway directory
-    ./test-layout.sh               window layout from outside, both languages; needs Accessibility
-    ./test-opening.sh              launch paths against disposable, signed-out profiles
-    ./test-sidebar.sh              sidebar sync against real Chromium storage; needs Claude and Node
-    ./test-relay.sh                the shared-usage relay over loopback, against a stand-in service
-    ./release.sh [--install]       tests, builds universal, draws the icon, signs, packages
-
-With only the Command Line Tools installed, the macOS 27 SDK they default to
-cannot compile the app's SwiftUI; put
-`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk` in front of
-any of these. The why is in [notes/updates-and-releases.md](notes/updates-and-releases.md).
+The graphical layout suite uses Accessibility. `./test-opening.sh` exercises launch behavior on disposable signed-out profiles. `./test-sidebar.sh` exercises Chromium storage with a locally installed Claude and Node. Run those suites when changing their respective features. Use a macOS SDK supported by the local Swift compiler. Build and packaging options are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Rules
 
 ### Opening a profile — [notes/opening-profiles.md](notes/opening-profiles.md)
 
-- **Never touch an app Graft did not create.** Bundles are known by the `graft.json` they carry, never by name; `Claude` and `Claude Graft` are reserved.
+- **Never touch an app Graft did not create.** Check the fork’s ownership marker and the validated profile binding before changing a bundle. `Claude`, `Claude Graft` and `Claude Switcher` are reserved.
 - **Profile folders are validated:** one plain component inside Application Support, never `Claude`, never a path. Reserved names and shared folders are compared as the disk compares them, ignoring case (`Graft.isNamed`), and `deleteProfile` refuses Graft's own folder.
 - **Every route that opens a profile asks first** through `ChatConflict`; the suite fails if one of the three views stops naming it.
 - **A missing shortcut is never permission to open another profile.** `ProfileOpener` reports an error instead.
@@ -96,7 +76,7 @@ any of these. The why is in [notes/updates-and-releases.md](notes/updates-and-re
 - **Going back is a handover, not a delete.** A copy goes only when the other side holds the same bytes at that moment.
 - **A folder that lost everything at once was moved, not cleared.** Forget the baseline; `forgetStalePairs` drops dead pairs.
 - **The baseline says what the filesystem did, never what a pass meant to do.**
-- **One pass at a time, across processes:** `Graft.withStateLock` holds `ClaudeGraft/state.lock` over every read-modify-write of `mirrored-chats.json` and `session-records.json`, and is let go before `launch` takes the launch lock.
+- **One pass at a time, across processes:** `Graft.withStateLock` holds `ClaudeSwitcher/state.lock` over every read-modify-write of `mirrored-chats.json` and `session-records.json`, and is let go before `launch` takes the launch lock.
 - **Nothing goes to the stash before the source has been read.**
 - **A stash beside a folder blocks withdrawal as well as filing** (`mayFileRecords`, both directions).
 - **Every way out drops the pairs**, and a pair is read by its borrowing half: `mirrorPairs(borrowedBy:)`.
@@ -135,21 +115,21 @@ any of these. The why is in [notes/updates-and-releases.md](notes/updates-and-re
 - **Only `POST /v1/messages` changes accounts.** Everything else a conversation owns keeps the sender's token, and the Chat tab is never shared.
 - **What cannot change accounts goes out as it came,** byte for byte: an upgrade is spliced after its `101`, a chunked body forwarded as it arrives. Remote Control needs no syncing.
 - **Lending belongs to the Claude that borrows** — `usage-sharing.json`. One account is counted once, under the first of its names that can lend; the borrower's own account adds nothing.
-- **Claude Code is reached through `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`, never an address,** and the port never moves from 47823.
+- **Claude Code is reached through `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`, never an address,** and the port never moves from 47825.
 - **The lines go only into a closed Claude,** under `SidebarSync.withLaunchLock`; a launcher swaps only the exact value `pool/environment.json` expects. `PoolEnvironment.swift` alone names the file.
 - **The lines take nothing away:** a proxy or certificate a person set is left alone, and copies in `scopedEnvVars` come out whenever the profile is found closed. A name holding exactly Graft's value is Graft's whatever sits beside it: it comes out at the next close and keeps the relay up until then.
 - **No relay is worse than no sharing.** `graft-relay` outlives Graft; a launcher that cannot reach it opens without the lines, and the lines come out before the relay goes.
 - **A relay is replaced only by a Graft that can configure its successor** (`relayStep`): with the key shut nothing is configured, the relay there is kept with what it has, and the dropdown says lending is paused. One whose status will not decode is sent a bare quit.
 - **A retiring relay closes idle HTTP connections.** In-progress replies and upgraded sockets can finish, and subsequent requests go to the current relay.
-- **Graft going takes the lines with it.** `graft-launch --stop-sharing`, for the cask's uninstall, and the relay, once its own file is missing at two looks a minute apart, put each closed Claude's plain value back from the journal (`PoolEnvironment.takeOutLines`) and mark every entry unwanted; the relay stops lending and leaves once none still holds them.
+- **Graft going takes the lines with it.** `graft-launch --stop-sharing`, for explicit cleanup, and the relay, once its own file is missing at two looks a minute apart, put each closed Claude's plain value back from the journal (`PoolEnvironment.takeOutLines`) and mark every entry unwanted; the relay stops lending and leaves once none still holds them.
 - **The authority vouches for `api.anthropic.com` alone,** its key deleted once it has signed and the identity imported with `kSecImportToMemoryOnly`, which is why sharing needs macOS 15. Only the relay holding `relay.lock` renews it.
 - **A sender is the SHA-256 of its bearer** against its profile's token cache; a request nobody owns passes through, and a pane sign-in's refresh token is never read. A config caught mid-write lends the last login read whole, ten minutes at most (`steady`).
-- **Which account answers:** room is under 98% of five hours and 99% of the week, soonest weekly reset first; a conversation stays while its cache lives, and a choice from the dropdown outranks both until a day of quiet.
+- **Use the primary account first for ordinary requests.** A full or refused primary can fall back to an eligible backup. An explicit assignment or account-bound continuation can affect that order. A profile’s automatic-switching setting persists separately from its list of backup accounts.
 - **A conversation carrying reasoning stays where it was written:** `carriesBoundReasoning` holds it past its cache and moves it only when that account has no room, then leaves it there; a model is bound unless `reasoningTravels` names it. The holder is mapped to the name its account is counted under, and one no longer lent sends it home.
 - **A thread stays where it is stored:** a `continuesThread` request is held like reasoning, whatever the model, and only answers to requests carrying a thread say where a conversation is.
 - **A borrowed login's refusal is retried, never shown:** a 429 moves on, a 401 marks that login refused, and a 400, 403 or 404 sends the request home — except `thread_not_found` on a moved thread, which Claude Code must hear to start it again where it went. Home is the sender's next attempt, and every plan ends with one (`PoolState.plan`), so a lent account's answer is never the one delivered.
 - **An explicit Fable-only refusal holds Fable on that account until its reset.** An account-wide refusal still applies to every model.
-- **A reported early Fable reset is checked on the next eligible Fable request.** Only its borrower can use that one attempt, and the service's answer decides whether regular routing resumes.
+- **A reported early Fable reset is checked on the next eligible Fable request.** The next eligible request can try the primary with its own bearer or a configured backup with a valid login. The service response determines whether the hold clears.
 - **Some requests never move:** a body referring to a file, container or MCP server by value (`accountBoundMarks`, never the bare key, which a tool schema can carry), or one that is encoded.
 - **The dropdown's front Claude is `FrontmostClaude`'s,** and its watch on the relay ends in `popoverDidClose`, never in the view.
 - **The conversation on screen runs across the bar** while it is there, drawn at a fixed width (`NewChatTicker`): the one Claude's own records focused last (`lastFocusedAt`, owned by the store it was first seen in, since the mirror copies it), by its title alone if the relay never carried it, and only where no record says, the one typed into last (`promptedAt`, a turn on a thread). `StoreWatch` wakes a look when a store changes. The text gives way when it would push the item out of the bar (`keepReachable`).
@@ -191,22 +171,16 @@ any of these. The why is in [notes/updates-and-releases.md](notes/updates-and-re
 - **The window's root is a `NavigationSplitView` with a real sidebar;** notices go inside the detail column, never above the split view. The suite fails if the sidebar loses its behaviour or full height, or the title crosses its edge.
 - **Every control is named and identified by hand** with `identified`, on the control, never on a stack. Never call `NSApp.setAccessibilityWindows`.
 - **No `MenuBarExtra`. Nothing blocking in a view body. Long-lived objects live in `enum Shared`.**
-- **The window fits at 820×560 without scrolling,** every page, and Settings fits its own: a note is one line (`OneLineNote`), its paragraph behind an `InfoButton`.
+- **The routing dashboard scrolls at compact sizes.** Keep the other profile pages readable at 820×560 and let Settings fit its contents: a note is one line (`OneLineNote`), its paragraph behind an `InfoButton`.
 - **A running Claude keeps its own Dock icon and name;** the menu bar says which one is in front instead.
 - **A colour is handed out once and never twice** (`IconPreset.next`): a new Claude or lent account takes the first free one; nothing recolours what exists, and an account that is a Claude here wears that Claude's.
 
-### Updates and releases — [notes/updates-and-releases.md](notes/updates-and-releases.md), [notes/update-relaunch.md](notes/update-relaunch.md)
+### Updates and releases
 
-- **The version is written down once,** in `VERSION`; `Resources/Info.plist` keeps `0.0.0`. `release.sh` refuses an existing tag and rewrites the Homebrew cask.
-- **A release carries both architectures. The build directory is `build.noindex`** so Spotlight skips it.
-- **An update restart is not permission to undo a quit** — `UpdateRecovery` needs a fresh `stealth-relaunch` marker.
-- **Checking for a Claude release never closes a Claude;** installing one asks first and never force quits.
-- **A resumed update takes the lock before it reads anything,** and decides on the first snapshot that reads (`ClaudeUpdateResume`); a stopping updater is asked again every ten seconds and shown after a minute (`ClaudeUpdateStop`).
-- **Claude's updater runs hidden and signed out** — `UpdaterProfile.reset` trashes a profile someone signed into.
-- **Graft's own update installs itself and says nothing,** a press included (`checkForUpdatesInBackground`); a hold is off unless turned on.
-- **`sparkle:minimumAutoupdateVersion` 1.1.0 is a floor** on every entry from 1.1.0 on, and **every release needs a note that says what upgrading from 1.0.x does**: a 1.0.x Mac is asked about the newest one.
-- **The feed keeps every release** (`--maximum-versions 0`), **and its URL never changes.**
-- **The feed is built and checked in `dist/sparkle`** — signature, length and floor asked of the new `<item>` itself — and reaches `docs/` only after the cask.
+- The release version is stored in `VERSION`. The build stamps it into the bundled Info.plist and verifies the app and its helpers. The distribution package includes arm64 and x86_64 slices.
+- Switcher’s **Download Updates…** menu opens the fork’s GitHub Releases page. `release.sh` creates and verifies local artifacts. Publishing the tag, release notes and artifacts is a separate step. Apple notarization is selected with `--notarize`. [Packaging and signing](CONTRIBUTING.md#release-packages)
+- Claude Desktop’s own update controls retain their recovery behavior. An update restart requires a fresh `stealth-relaunch` marker before `UpdateRecovery` restores a profile.
+- Checking for a Claude release leaves running Claudes open. Installing it asks first. A resumed update takes its lock before reading a snapshot. The updater runs signed out.
 
 ### Sidebar and desktop settings — [notes/sidebar-and-settings.md](notes/sidebar-and-settings.md)
 
@@ -218,6 +192,6 @@ any of these. The why is in [notes/updates-and-releases.md](notes/updates-and-re
 
 ### Diagnostics and verification — [notes/diagnostics-and-verification.md](notes/diagnostics-and-verification.md)
 
-Each pass appends to `ClaudeGraft/diagnostics.log` and rewrites
-`ClaudeGraft/state-report.txt`; read those before guessing. The note also says
+Each pass appends to `ClaudeSwitcher/diagnostics.log` and rewrites
+`ClaudeSwitcher/state-report.txt`; read those before guessing. The note also says
 what has been seen working on a real machine and what is still unproven.

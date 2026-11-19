@@ -1,14 +1,7 @@
 import AppKit
 
-// Draws the app icon and writes an .iconset for iconutil. Run through
-// release.sh; there is no drawing program in the loop and no layered source
-// file to keep in step with the code.
-//
-// The mark is a graft: two stems rising from below, meeting, and carrying on as
-// one. The right-hand stem is the paler of the two because that is what the app
-// actually does — a shortcut borrows the account beside it rather than becoming
-// it. Everything is placed in fractions of the icon body, so 16 points and 1024
-// are the same drawing rather than two that have to be kept looking alike.
+// Rebuild the source-controlled icon with swift Tools/make-icon.swift <output.iconset>
+// followed by iconutil -c icns <output.iconset>.
 
 let arguments = CommandLine.arguments
 guard arguments.count > 1 else {
@@ -55,92 +48,42 @@ func draw(size: Int) -> Data? {
         let context = NSGraphicsContext(bitmapImageRep: bitmap)?.cgContext
     else { return nil }
 
-    // Apple's icon grid: a 1024 canvas holding an 824 body. An icon drawn edge
-    // to edge stands proud of every other one in the Dock.
-    let inset = side * (100.0 / 1024.0)
-    let body = CGRect(x: inset, y: inset, width: side - inset * 2, height: side - inset * 2)
-
-    // The shadow the macOS icon template bakes in. Left off below 128 points,
-    // where it eats more contrast than it buys depth.
-    if size >= 128 {
-        context.setShadow(offset: CGSize(width: 0, height: -side * 0.014),
-                          blur: side * 0.026,
-                          color: CGColor(red: 0.08, green: 0.03, blue: 0, alpha: 0.24))
-        context.addPath(squircle(in: body))
-        context.setFillColor(colour(0xC85A34))
-        context.fillPath()
-        context.setShadow(offset: .zero, blur: 0, color: nil)
-    }
-
+    // Work in the same 1024-unit coordinate system for every Finder and Dock size.
+    context.scaleBy(x: side / 1024, y: side / 1024)
+    let body = CGRect(x: 100, y: 100, width: 824, height: 824)
+    let shape = squircle(in: body)
     context.saveGState()
-    context.addPath(squircle(in: body))
+    context.setShadow(offset: CGSize(width: 0, height: -11), blur: 20, color: colour(0x092C27, 0.33))
+    context.addPath(shape)
+    context.setFillColor(colour(0x0B3934))
+    context.fillPath()
+    context.restoreGState()
+    context.saveGState()
+    context.addPath(shape)
     context.clip()
 
-    // Terracotta, lit from the top left the way macOS lights everything.
-    if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                 colors: [colour(0xEE9366), colour(0xD1663C), colour(0xA43C19)] as CFArray,
-                                 locations: [0, 0.52, 1]) {
-        context.drawLinearGradient(gradient,
-                                   start: CGPoint(x: body.minX, y: body.maxY),
-                                   end: CGPoint(x: body.maxX, y: body.minY),
-                                   options: [])
+    let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                              colors: [colour(0x306D65), colour(0x174842), colour(0x082B29)] as CFArray,
+                              locations: [0, 0.47, 1])!
+    context.drawLinearGradient(gradient, start: CGPoint(x: 125, y: 920),
+                               end: CGPoint(x: 903, y: 120), options: [])
+    // Opposed slider positions echo the two accounts. Their silhouettes stay distinct at 16 px.
+    func track(y: CGFloat, fill: CGColor, thumbOnRight: Bool, thumb: CGColor) {
+        let rect = CGRect(x: 260, y: y, width: 504, height: 158)
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: -4), blur: 8, color: colour(0x001C19, 0.25))
+        context.addPath(CGPath(roundedRect: rect, cornerWidth: 79, cornerHeight: 79, transform: nil))
+        context.setFillColor(fill)
+        context.fillPath()
+        context.restoreGState()
+        let center = thumbOnRight ? rect.maxX - 79 : rect.minX + 79
+        let circle = CGRect(x: center - 51, y: rect.midY - 51, width: 102, height: 102)
+        context.setFillColor(thumb)
+        context.fillEllipse(in: circle)
     }
-
-    // The sheen off the top edge, which is what keeps a flat gradient from
-    // reading as a printed sticker.
-    if let sheen = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                              colors: [CGColor(red: 1, green: 1, blue: 1, alpha: 0.18),
-                                       CGColor(red: 1, green: 1, blue: 1, alpha: 0)] as CFArray,
-                              locations: [0, 1]) {
-        context.drawRadialGradient(sheen,
-                                   startCenter: CGPoint(x: body.midX, y: body.maxY),
-                                   startRadius: 0,
-                                   endCenter: CGPoint(x: body.midX, y: body.maxY),
-                                   endRadius: body.width * 0.8,
-                                   options: [])
-    }
-
-    // ---- the graft ----------------------------------------------------
-
-    func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-        CGPoint(x: body.minX + body.width * x, y: body.minY + body.height * y)
-    }
-
-    let ink = CGColor(red: 1, green: 0.972, blue: 0.945, alpha: 0.97)
-    let inkBorrowed = CGColor(red: 1, green: 0.972, blue: 0.945, alpha: 0.52)
-    let union = point(0.5, 0.475)
-
-    context.setLineWidth(body.width * 0.122)
-    context.setLineCap(.round)
-    context.setLineJoin(.round)
-
-    // The borrowed stem stops at the union rather than crossing it. It feeds
-    // the trunk; it is not the trunk.
-    let scion = CGMutablePath()
-    scion.move(to: point(0.765, 0.215))
-    scion.addCurve(to: union, control1: point(0.745, 0.365), control2: point(0.64, 0.425))
-    context.addPath(scion)
-    context.setStrokeColor(inkBorrowed)
-    context.strokePath()
-
-    // Rootstock and trunk as one unbroken line, so the union is a join and not
-    // a seam between two strokes that happen to touch.
-    let trunk = CGMutablePath()
-    trunk.move(to: point(0.235, 0.215))
-    trunk.addCurve(to: union, control1: point(0.255, 0.365), control2: point(0.36, 0.425))
-    trunk.addLine(to: point(0.5, 0.82))
-    context.addPath(trunk)
-    context.setStrokeColor(ink)
-    context.strokePath()
-
+    track(y: 542, fill: colour(0xAAF1CE), thumbOnRight: true, thumb: colour(0x174940))
+    track(y: 323, fill: colour(0x467B70), thumbOnRight: false, thumb: colour(0xEBFFF2))
     context.restoreGState()
-
-    // A hairline of the light along the edge, kept inside the clip so it does
-    // not soften the silhouette.
-    context.addPath(squircle(in: body.insetBy(dx: side * 0.005, dy: side * 0.005)))
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.20))
-    context.setLineWidth(side * 0.006)
-    context.strokePath()
 
     return bitmap.representation(using: .png, properties: [:])
 }

@@ -155,10 +155,13 @@ for _ in range(100):
     if os.path.exists(socket_path): break
     time.sleep(0.05)
 check(os.path.exists(socket_path), "the relay opens its control socket once it is listening")
-pool = os.path.join(support, "ClaudeGraft", "pool")
+pool = os.path.join(support, "ClaudeSwitcher", "pool")
 ca = os.path.join(pool, "relay-ca.pem")
 
-def control(command):
+def control(command, production_order=False):
+    # Historical ordering cases exercise reset-date prioritization explicitly.
+    if "configure" in command and not production_order:
+        command["configure"].setdefault("primaryFirst", False)
     s = socket.socket(socket.AF_UNIX); s.settimeout(5)
     os.chdir(work); s.connect("r.sock")
     s.sendall(json.dumps(command).encode() + b"\n")
@@ -274,12 +277,69 @@ check(recent["servedBy"] == "A" and recent["passedOver"] == [{"id": "B", "reason
       "the record says which account was passed over and why")
 accounts["tok-B"]["reject"] = False
 
+# The app uses primary-first. A missing policy from an older client uses the same rule.
+home_id, backup_id = "switch-home", "switch-backup"
+home_token, backup_token = "tok-switch-home", "tok-switch-backup"
+for token, reset in [(home_token, 6 * 86400), (backup_token, 86400)]:
+    accounts[token] = {"7d": 0.1, "7d-reset": now + reset, "reject": False}
+switch_members = [
+    dict(member(home_id, home_token, borrows=[backup_id]), limits=pushed(now + 6 * 86400)),
+    dict(member(backup_id, backup_token), limits=pushed(now + 86400))]
+for mode in [{}, {"primaryFirst": True}]:
+    control({"configure": {"enabled": True, "members": switch_members, **mode}}, production_order=True)
+    response, _, went = ask(conn, home_token, session=None)
+    check(response.status == 200 and [w["token"] for w in went] == [home_token],
+          "primary answers first with " + ("an explicit policy" if mode else "the default policy"))
+accounts[home_token]["reject"] = True
+response, payload, went = ask(conn, home_token, session=None)
+check(response.status == 200 and payload == b"".join(STREAM)
+      and [w["token"] for w in went] == [home_token, backup_token],
+      "the primary hitting a limit hands the same request to a working backup")
+response, _, went = ask(conn, home_token, session=None)
+check(response.status == 200 and [w["token"] for w in went] == [backup_token],
+      "the next request skips the known-limited primary")
+control({"pausedProfiles": [home_id]})
+response, _, went = ask(conn, home_token, session=None)
+check(response.status == 429 and [w["token"] for w in went] == [home_token],
+      "turning automatic switching off immediately keeps a connected profile on its own account")
+control({"pausedProfiles": []})
+response, _, went = ask(conn, home_token, session=None)
+check(response.status == 200 and [w["token"] for w in went] == [backup_token],
+      "turning automatic switching back on resumes the saved backup on the original connection")
+
+control({"allowedLenders": {home_id: []}})
+response, _, went = ask(conn, home_token, session=None)
+check(response.status == 429 and [w["token"] for w in went] == [home_token],
+      "revoking a backup while the keychain is locked takes effect on the next request")
+control({"configure": {"enabled": True, "members": switch_members + [member("same-login", home_token)]}},
+        production_order=True)
+response, _, went = ask(conn, home_token, session=None)
+check(response.status == 429 and [w["token"] for w in went] == [home_token],
+      "two profiles presenting the same login cannot borrow on one another's behalf")
+
 # Fable may run out on a lender whose other models still have room.
 fable_model = "claude-fable-5-2"
 def check_model_route(model, expected, message, sender="tok-scope-home"):
     body = json.dumps({"model": model, "messages": []}, separators=(",", ":")).encode()
     response, _, went = ask(conn, sender, session=None, body=body)
     check(response.status == 200 and [w["token"] for w in went] == expected, message)
+
+# A profile need not lend its token to other profiles to recheck its own early reset.
+primary, secondary = "fable-primary", "fable-secondary"
+primary_token, secondary_token = "tok-primary-reset", "tok-secondary-reset"
+accounts[primary_token] = {"7d": 0.3, "7d-reset": now + 3 * 86400, "reject": False,
+                           "model_rejections": {fable_model: {"7d-status": "allowed", "7d_oi-status": "rejected"}}}
+accounts[secondary_token] = {"7d": 0.1, "7d-reset": now + 86400, "reject": False}
+control({"configure": {"enabled": True, "members": [
+    member(primary, primary_token, lend=False, borrows=[secondary]), member(secondary, secondary_token)]}},
+    production_order=True)
+check_model_route(fable_model, [primary_token, secondary_token], "the primary's Fable limit switches to its backup", primary_token)
+check_model_route(fable_model, [secondary_token], "a primary with a known Fable limit is skipped", primary_token)
+control({"recheckFable": primary})
+accounts[primary_token]["model_rejections"].clear()
+check_model_route("claude-opus-5-5", [primary_token], "Opus remains on the primary during a scoped Fable hold", primary_token)
+check_model_route(fable_model, [primary_token], "early-reset recheck uses the primary's original authorization", primary_token)
+check_model_route(fable_model, [primary_token], "an accepted primary recheck clears its Fable-only hold", primary_token)
 
 def push_scope_pool(scope, lend=True):
     control({"configure": {"enabled": True, "members": [
@@ -866,7 +926,7 @@ copy = os.path.join(gone, "graft-relay")
 with open(RELAY, "rb") as source, open(copy, "wb") as target: target.write(source.read())
 os.chmod(copy, 0o755)
 gone_support = os.path.join(gone, "support")
-gone_pool = os.path.join(gone_support, "ClaudeGraft", "pool")
+gone_pool = os.path.join(gone_support, "ClaudeSwitcher", "pool")
 os.makedirs(gone_pool)
 def claude(name, field):
     path = os.path.join(gone, name)
@@ -884,17 +944,20 @@ gone_args = [copy, "--support", gone_support, "--port", str(free_port()), "--soc
              "--upstream-loopback-port", str(upstream_port), "--removal-check", "0.4"]
 left = subprocess.Popen(gone_args, cwd=gone, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL)
-time.sleep(1.5)
+for _ in range(300):
+    if os.path.exists(os.path.join(gone, "g.sock")) or left.poll() is not None: break
+    time.sleep(0.05)
+check(os.path.exists(os.path.join(gone, "g.sock")), "the isolated cleanup relay is ready")
 check(environment(closed_claude)["envVars"] == "pooled-1" and left.poll() is None,
       "a relay whose file is still there leaves every Claude as it is")
 os.remove(copy)
-shutil.rmtree(os.path.join(gone_support, "ClaudeGraft"))
+shutil.rmtree(os.path.join(gone_support, "ClaudeSwitcher"))
 time.sleep(2)
 check(environment(closed_claude) == {"envVars": "plain-1", "kept": 1},
       "once its file has gone, a closed Claude gets back what it held before sharing, from the journal it read last")
 check(environment(open_claude)["envVars"] == "pooled-2" and left.poll() is None,
       "while one still open keeps the lines and the relay keeps answering it")
-check(not os.path.exists(os.path.join(gone_support, "ClaudeGraft")),
+check(not os.path.exists(os.path.join(gone_support, "ClaudeSwitcher")),
       "and nothing of Graft's that was removed is made again")
 still_open.kill(); still_open.wait()
 try:

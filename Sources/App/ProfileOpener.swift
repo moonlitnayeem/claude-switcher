@@ -15,7 +15,7 @@ enum ProfileOpener {
         var errorDescription: String? {
             switch self {
             case .missingShortcut:
-                return L10n.text("This profile's shortcut could not be found. Open Claude Graft and update the shortcut, then try again.")
+                return L10n.text("This profile's shortcut could not be found. Open Claude Switcher and update the shortcut, then try again.")
             case .couldNotOpen:
                 return L10n.text("The selected profile could not be opened. Try again after any Claude update finishes.")
             }

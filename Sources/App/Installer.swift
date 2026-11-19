@@ -35,12 +35,16 @@ enum Installer {
     }
 
     /// Names that belong to Claude itself and must never be written over.
-    static let reservedNames = ["Claude", "Claude Graft"]
+    static let reservedNames = ["Claude", "Claude Graft", "Claude Switcher"]
+    static let shortcutIDPrefix = "com.moonlitnayeem.claude-switcher.shortcut."
 
     /// True only for a bundle this app built. Every destructive step checks it,
     /// so an unrelated application that happens to share a name is left alone.
     static func isGraftBundle(_ url: URL) -> Bool {
-        fm.fileExists(atPath: url.appending(path: "Contents/Resources/graft.json").path)
+        guard let identifier = plist(at: url.appending(path: "Contents/Info.plist"))?["CFBundleIdentifier"] as? String,
+              identifier.hasPrefix(shortcutIDPrefix), identifier.count > shortcutIDPrefix.count
+        else { return false }
+        return fm.fileExists(atPath: url.appending(path: "Contents/Resources/switcher.json").path)
     }
 
     /// Where an already-installed shortcut might be sitting.
@@ -52,7 +56,7 @@ enum Installer {
 
     /// The bundle a shortcut was installed as, wherever it is and whatever it
     /// is called now: the names it has had first, then any bundle whose
-    /// `graft.json` names its profile. Deliberately blind to anything Graft
+    /// `switcher.json` names its profile. Deliberately blind to anything Graft
     /// did not create, and to a description that will not parse.
     ///
     /// Looking only for `<name>.app` missed every bundle renamed in Finder and
@@ -114,10 +118,10 @@ enum Installer {
         return names.filter { !$0.isEmpty }
     }
 
-    /// The profile a bundle's `graft.json` opens, or nil without a readable one.
+    /// The profile a bundle's `switcher.json` opens, or nil without a readable one.
     static func describedProfile(of bundle: URL) -> URL? {
-        guard bundle.pathExtension == "app",
-              let data = try? Data(contentsOf: bundle.appending(path: "Contents/Resources/graft.json")),
+        guard bundle.pathExtension == "app", isGraftBundle(bundle),
+              let data = try? Data(contentsOf: bundle.appending(path: "Contents/Resources/switcher.json")),
               let config = try? JSONDecoder().decode(GraftConfig.self, from: data)
         else { return nil }
         return URL(fileURLWithPath: config.profileDir)
@@ -140,11 +144,11 @@ enum Installer {
         var errorDescription: String? {
             switch self {
             case .missingLauncher:
-                return L10n.text("This copy of Claude Graft is missing its launcher binary.")
+                return L10n.text("This copy of Claude Switcher is missing its launcher binary.")
             case .reservedName(let name):
                 return L10n.format("“%@” is the name of Claude itself. Pick something else.", name)
             case .nameTaken(let path):
-                return L10n.format("There is already an application at %@ that Claude Graft did not create. Rename this shortcut.", path)
+                return L10n.format("There is already an application at %@ that Claude Switcher did not create. Rename this shortcut.", path)
             case .badFolder(let reason):
                 return reason
             case .selfSource:
@@ -169,7 +173,7 @@ enum Installer {
             throw InstallError.missingLauncher
         }
 
-        guard !reservedNames.contains(shortcut.name) else {
+        guard !reservedNames.contains(where: { Graft.isNamed(shortcut.name, $0) }) else {
             throw InstallError.reservedName(shortcut.name)
         }
 
@@ -216,7 +220,7 @@ enum Installer {
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
 
             let data = try JSONEncoder().encode(config)
-            try data.write(to: resources.appending(path: "graft.json"))
+            try data.write(to: resources.appending(path: "switcher.json"))
 
             try infoPlist(for: shortcut).write(to: contents.appending(path: "Info.plist"),
                                                atomically: true, encoding: .utf8)
@@ -273,10 +277,10 @@ enum Installer {
         }
     }
 
-    /// Bring a bundle's `graft.json` back into line with the list.
+    /// Bring a bundle's `switcher.json` back into line with the list.
     ///
     /// What a shortcut does is written down twice: in `shortcuts.json`, which
-    /// the window edits, and in the bundle's own `graft.json`, which is what
+    /// the window edits, and in the bundle's own `switcher.json`, which is what
     /// actually runs. The Dock, Finder and Spotlight start the binary in the
     /// bundle and ask Graft nothing, so where the two disagree the bundle wins
     /// and the window is describing a shortcut that does not exist.
@@ -317,7 +321,7 @@ enum Installer {
             describedProfile(of: $0) == nil ? $0 : nil
         }
         guard let bundle = installedBundle(for: shortcut, among: shortcuts) ?? unreadable else { return false }
-        let file = bundle.appending(path: "Contents/Resources/graft.json")
+        let file = bundle.appending(path: "Contents/Resources/switcher.json")
         let wanted = GraftConfig(profileDir: shortcut.profileDir.path,
                                  sourceDir: sourceDir?.path)
         let current = (try? Data(contentsOf: file))
@@ -435,7 +439,7 @@ enum Installer {
     private static func infoPlist(for shortcut: Shortcut) -> String {
         let slug = shortcut.folder.lowercased()
             .map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "-" }
-        let identifier = "graft." + String(slug)
+        let identifier = shortcutIDPrefix + String(slug)
         let name = escaped(shortcut.name)
         let version = graftVersion
         return """

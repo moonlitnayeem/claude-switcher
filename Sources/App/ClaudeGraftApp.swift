@@ -3,7 +3,7 @@ import SwiftUI
 
 @main
 struct ClaudeGraftApp: App {
-    static let mainWindowID = "graft-main"
+    static let mainWindowID = "switcher-main"
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
@@ -15,7 +15,7 @@ struct ClaudeGraftApp: App {
     private var usage: UsageMonitor { Shared.usage }
 
     var body: some Scene {
-        WindowGroup("Claude Graft", id: Self.mainWindowID) {
+        WindowGroup("Claude Switcher", id: Self.mainWindowID) {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(settings)
@@ -27,7 +27,7 @@ struct ClaudeGraftApp: App {
                     if !Shared.startHidden { NSApp.setActivationPolicy(.regular) }
                 }
         }
-        .defaultSize(width: 820, height: 560)
+        .defaultSize(width: 1000, height: 690)
         .commands {
             CommandGroup(replacing: .newItem) {}
             // View › Show/Hide Sidebar, with the shortcut every Mac sidebar has.
@@ -51,7 +51,6 @@ enum Shared {
     static let settings = AppSettings()
     static let usage = UsageMonitor()
     static let frontmost = FrontmostClaude()
-    static let updater = Updater()
     static let sessionRecords = SessionRecords()
     static let updateRecovery = UpdateRecoveryMonitor()
     static let manualUpdates = ManualUpdateSettings()
@@ -78,7 +77,8 @@ struct SettingsView: View {
                 FrontClaudeControl()
                     .disabled(!settings.showInMenuBar)
                 ManualUpdateControl()
-                HoldUpdatesControl()
+                Button("Download Updates…") { Links.open(Links.releases) }
+                    .identified("download-updates")
             } footer: {
                 Text(problem ?? L10n.text("""
                      The menu bar item keeps reporting usage after this window is \
@@ -90,6 +90,7 @@ struct SettingsView: View {
                     .padding(.top, 2)
             }
         }
+        .toggleStyle(.switch)
         .formStyle(.grouped)
         // A grouped form scrolls, so it asks for no height of its own and a
         // window sized from it opens as a titlebar; held to its rows, the
@@ -139,7 +140,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Before anything that might wait on the network: a Claude connected to
         // the pool after a restart has no Claude Code until the relay is back.
         Shared.usagePool.start(store: Shared.store, usage: Shared.usage)
-        Shared.updater.start(holding: Shared.settings)
         // No prompts, no windows: filing records is a thing the menu bar
         // does on its own whether anyone is looking or not. Once, here —
         // the pass that matters runs in a shortcut's launcher, on its way
@@ -183,7 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// setting says what was wanted, not whether the bar had room.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if QuitPolicy.endsTheApp(askedFor: Self.quitWasAskedFor,
-                                 installingUpdate: Updater.isRelaunchingForUpdate,
+                                 installingUpdate: false,
                                  systemGoingDown: systemIsGoingDown,
                                  menuBarShowing: menuBar?.isShowing == true) {
             Self.isTerminating = true

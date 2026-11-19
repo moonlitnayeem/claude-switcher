@@ -1,29 +1,23 @@
-name: Idea
-description: Something Graft could do that it does not
+name: Feature request
+description: Suggest an improvement to Claude Switcher
 labels: [enhancement]
 body:
   - type: textarea
     id: what
     attributes:
-      label: What you want
+      label: What would you like to do?
+      description: Describe the task and the result you would expect in the app.
     validations:
       required: true
 
   - type: textarea
     id: today
     attributes:
-      label: What you do instead today
-      description: >
-        The workaround is usually the most useful part of the report — it says
-        what the thing is actually for.
-    validations:
-      required: true
+      label: How do you handle this today?
+      description: Include any workaround or repeated steps that the change would simplify.
 
   - type: textarea
     id: existing-profiles
     attributes:
-      label: What it would mean for profiles that already exist
-      description: >
-        Only if the idea touches where chats live. Anything that moves a chat
-        history has to say what happens to the histories already on the machine,
-        and whether it can be undone.
+      label: Impact on existing profiles
+      description: For changes to account selection or chat history, explain what should happen to existing profiles and conversations.

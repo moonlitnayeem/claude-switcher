@@ -122,17 +122,8 @@ enum PoolEnvironment {
     }
 
     static func writeJournal(_ journal: Journal) {
-        try? FileManager.default.createDirectory(at: UsagePool.directory, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
         guard let data = try? JSONEncoder().encode(journal) else { return }
-        let temporary = UsagePool.directory.appending(path: ".environment-\(UUID().uuidString)")
-        guard FileManager.default.createFile(atPath: temporary.path, contents: data,
-                                             attributes: [.posixPermissions: 0o600]),
-              rename(temporary.path, journalFile.path) == 0
-        else {
-            unlink(temporary.path)
-            return
-        }
+        try? UsagePool.writePrivate(data, to: journalFile)
     }
 
     /// Puts the right value in place for a profile about to be opened. Runs
@@ -189,8 +180,7 @@ enum PoolEnvironment {
         // A zap has taken the folder. Taking the launch lock or writing a note
         // would make it again, and no launcher can be acting on a journal that
         // is not there.
-        let present = FileManager.default.fileExists(atPath: Graft.applicationSupport
-            .appending(path: "ClaudeGraft").path)
+        let present = FileManager.default.fileExists(atPath: Graft.graftFolder.path)
         var left: [String] = []
         for (path, entry) in journal.profiles.sorted(by: { $0.key < $1.key }) {
             let profile = URL(fileURLWithPath: path)

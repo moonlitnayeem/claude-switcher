@@ -112,6 +112,7 @@ final class Exchange {
                                         model: model, continuing: continuing)
 
         var passed: [PoolPass] = []
+        var primaryRefusal: (answer: (head: HTTPHead, raw: Data), body: Data)?
         var index = 0
         while index < attempts.count {
             let attempt = attempts[index]
@@ -124,11 +125,21 @@ final class Exchange {
             }
             let last = index == attempts.count - 1
             let borrowed = attempt.token != nil
+            // If all backups failed after an explicit recheck, return the original
+            // provider refusal without spending the one-use recheck twice.
+            if last, !borrowed, let primaryRefusal {
+                await state.served(by: own, from: own, session: session, status: primaryRefusal.answer.head.status ?? 429,
+                                   passedOver: passed, model: model, cacheLifetime: PoolPolicy.cacheLifetime(of: body),
+                                   threaded: PoolRequest.carriesThread(body: body), starts: PoolRequest.startsConversation(body: body),
+                                   prompted: PoolRequest.startsTurn(body: body))
+                return try await deliver(primaryRefusal.answer, body: primaryRefusal.body, method: head.method,
+                                         keepAlive: head.keepsAlive)
+            }
             // A moved thread's refusal is read to tell `thread_not_found` from
             // a plan that lacks something, and a compressed one cannot be.
             let request = HTTPMessage.request(head, body: body,
                                               authorization: attempt.token.map { "Bearer \($0)" },
-                                              plainAnswer: continuing && borrowed)
+                                              plainAnswer: continuing && (borrowed || attempt.fableRecheck != nil))
             let answer: (head: HTTPHead, raw: Data)
             do {
                 answer = try await send(request)
@@ -149,25 +160,31 @@ final class Exchange {
             if let member = attempt.member {
                 let outcome = await state.observe(member, answer.head.pairs, status: status,
                                                   borrowed: borrowed, model: model, recheck: attempt.fableRecheck)
-                if outcome == .refusedForAccount, status == 404, continuing, !last,
-                   let missing = try await threadMissing(answer, method: head.method) {
-                    // The thread is stored on the account the conversation
-                    // left, and sending the request there would undo the move.
-                    // Claude Code answers this by sending everything as a new
-                    // thread, which this account can take.
-                    Diagnostics.note("relay thread restarted", ["member": member])
-                    if let ticket = attempt.fableRecheck {
-                        await state.finishFableRecheck(member, ticket: ticket, newThreadFor: session, threadMissing: true)
+                if status == 404, continuing, (outcome == .refusedForAccount && !last || attempt.fableRecheck != nil),
+                   let refusalBody = try await threadRefusal(answer, method: head.method) {
+                    let missing = refusalBody.range(of: PoolRequest.threadMissing) != nil
+                    // Claude Code can restart a thread when its new account has
+                    // explicitly said it does not own the previous one.
+                    if missing || !borrowed {
+                        if missing { Diagnostics.note("relay thread restarted", ["member": member]) }
+                        if let ticket = attempt.fableRecheck {
+                            await state.finishFableRecheck(member, ticket: ticket, newThreadFor: session,
+                                                         threadMissing: missing)
+                        }
+                        await state.served(by: member, from: own, session: session, status: status,
+                                           passedOver: passed, model: model,
+                                           cacheLifetime: PoolPolicy.cacheLifetime(of: body), threaded: true,
+                                           starts: PoolRequest.startsConversation(body: body),
+                                           prompted: PoolRequest.startsTurn(body: body))
+                        return try await deliver(answer, body: refusalBody, method: head.method, keepAlive: head.keepsAlive)
                     }
-                    await state.served(by: member, from: own, session: session, status: status,
-                                       passedOver: passed, model: model,
-                                       cacheLifetime: PoolPolicy.cacheLifetime(of: body), threaded: true,
-                                       starts: PoolRequest.startsConversation(body: body),
-                                       prompted: PoolRequest.startsTurn(body: body))
-                    return try await deliver(answer, body: missing, method: head.method, keepAlive: head.keepsAlive)
                 }
                 if let ticket = attempt.fableRecheck { await state.finishFableRecheck(member, ticket: ticket) }
                 if outcome != .deliver, !last {
+                    if !borrowed, attempt.fableRecheck != nil, status == 429, let up = connection,
+                       let refusalBody = try? await up.readBody(answer.head.responseBody(to: head.method), limit: 64 * 1024) {
+                        primaryRefusal = (answer, refusalBody)
+                    }
                     // Its answer is a few hundred bytes nobody will read, and
                     // dropping the connection is cheaper than draining it.
                     connection?.close()
@@ -330,10 +347,9 @@ final class Exchange {
         }
     }
 
-    /// The body of a refusal, when it is the service saying it holds no such
-    /// thread. Read rather than dropped only here: an error is a few hundred
-    /// bytes, and which error it is decides whether it goes back or on.
-    private func threadMissing(_ answer: (head: HTTPHead, raw: Data), method: String) async throws -> Data? {
+    /// Read the refusal before deciding whether to pass it through or try the
+    /// sender's account. A specific missing-thread response lets the client restart.
+    private func threadRefusal(_ answer: (head: HTTPHead, raw: Data), method: String) async throws -> Data? {
         guard let up = connection else { return nil }
         let framing = answer.head.responseBody(to: method)
         guard framing != .untilClose else { return nil }
@@ -345,7 +361,7 @@ final class Exchange {
         // the service's own error type settles it next time.
         let error = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
         refusal = ((error?["error"] as? [String: Any])?["type"] as? String) ?? "unreadable"
-        return nil
+        return body
     }
 
     /// An answer whose body was read to decide on it. A chunked one goes back

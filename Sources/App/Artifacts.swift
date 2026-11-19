@@ -459,7 +459,7 @@ enum ArtifactAPI {
 
 /// What Graft keeps about artifacts, beside the rest of its own state.
 enum ArtifactFiles {
-    static var directory: URL { Graft.applicationSupport.appending(path: "ClaudeGraft") }
+    static var directory: URL { Graft.graftFolder }
     static var accounts: URL { directory.appending(path: "artifact-accounts.json") }
     static var groups: URL { directory.appending(path: "artifact-groups.json") }
 

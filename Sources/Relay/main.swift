@@ -56,6 +56,7 @@ final class Relay {
             Diagnostics.note("relay already running", [:])
             exit(0)
         }
+        remembered = PoolEnvironment.journalOnDisk()
         do {
             try PoolCertificates.ensure()
         } catch {
@@ -203,8 +204,8 @@ final class Relay {
     }
 
     private func handle(_ command: PoolCommand) async -> PoolStatus {
-        if let configuration = command.configure {
-            await state.configure(configuration)
+        if command.configure != nil || command.pausedProfiles != nil || command.allowedLenders != nil {
+            await state.updateRouting(command.configure, paused: command.pausedProfiles, allowedLenders: command.allowedLenders)
         }
         if let member = command.recheckFable { await state.recheckFable(member) }
         if command.quit == true {
@@ -409,6 +410,7 @@ while let argument = arguments.next() {
     }
 }
 Diagnostics.who = "graft-relay"
+Diagnostics.createsDirectory = false
 let relay = Relay(options: options)
 relay.start()
 dispatchMain()

@@ -443,8 +443,7 @@ final class UsageMonitor: ObservableObject {
     /// can be checked without reading it off the screen. Figures only — no
     /// token, and nothing that is not already on disk elsewhere.
     static var statusFile: URL {
-        Graft.applicationSupport
-            .appending(path: "ClaudeGraft")
+        Graft.graftFolder
             .appending(path: "usage-status.json")
     }
 

@@ -2,10 +2,9 @@
 # Exercises the real window with temporary profiles and mocked update replies.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-BUILD="$ROOT/build.noindex/layout-tests"
+BUILD="${SWITCHER_LAYOUT_BUILD_DIR:-$ROOT/build.noindex/layout-tests}"
 APP="$BUILD/Layout Checks.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-"$ROOT/Tools/fetch-sparkle.sh"
 
 # Keep Shared and the app's views, but let the test own the application lifecycle:
 # starting Graft's delegate would start monitoring the user's profiles.
@@ -16,12 +15,11 @@ sources=()
 for source in "$ROOT"/Sources/App/*.swift; do
     [[ "$source" == */ClaudeGraftApp.swift ]] || sources+=("$source")
 done
-swiftc -swift-version 5 \
+swiftc -whole-module-optimization -swift-version 5 \
     -target "$(uname -m)-apple-macos${MACOS_DEPLOYMENT_TARGET:-13.0}" \
-    -F "$ROOT/vendor" -framework Sparkle \
     "$ROOT"/Sources/Shared/*.swift "${sources[@]}" \
-    "$BUILD/ClaudeGraftApp.swift" "$ROOT/Tests/Layout/main.swift" \
-    -Xlinker -rpath -Xlinker "$ROOT/vendor" -o "$APP/Contents/MacOS/LayoutChecks"
+    "$BUILD/ClaudeGraftApp.swift" "$ROOT/Tests/Dashboard/DemoDashboard.swift" "$ROOT/Tests/Layout/main.swift" \
+    -o "$APP/Contents/MacOS/LayoutChecks"
 # A second process, so the checks can also read a window as an assistive app
 # does, from outside.
 swiftc -swift-version 5 \
@@ -31,7 +29,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>graft.layout-checks</string>
+<key>CFBundleIdentifier</key><string>com.moonlitnayeem.claude-switcher.layout-checks</string>
 <key>CFBundleExecutable</key><string>LayoutChecks</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleDevelopmentRegion</key><string>en</string>

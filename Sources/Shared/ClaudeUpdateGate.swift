@@ -3,7 +3,7 @@ import Foundation
 /// Launchers outlive the menu bar app. A file lock gives them the same answer
 /// about an update in progress and is released even if its owner crashes.
 enum ClaudeUpdateGate {
-    static var file: URL { Graft.applicationSupport.appending(path: "ClaudeGraft/desktop-update.lock") }
+    static var file: URL { Graft.graftFolder.appending(path: "desktop-update.lock") }
 
     enum Failure: LocalizedError {
         case busy, unavailable

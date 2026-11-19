@@ -11,6 +11,23 @@ struct UsageSharing: Codable, Equatable {
     /// Conversations moved to an account by hand, by session.
     var assignments: [String: Assignment] = [:]
 
+    /// Absent in configurations written before the switch was introduced.
+    var pausedProfiles: Set<String>?
+
+    func automaticSwitchingEnabled(for profile: String) -> Bool {
+        pausedProfiles?.contains(profile) != true
+    }
+
+    mutating func setAutomaticSwitching(_ enabled: Bool, for profile: String) {
+        var paused = pausedProfiles ?? []
+        if enabled { paused.remove(profile) } else { paused.insert(profile) }
+        pausedProfiles = paused.isEmpty ? nil : paused
+    }
+
+    func routingLenders(for profile: String) -> [String] {
+        automaticSwitchingEnabled(for: profile) ? lenders[profile] ?? [] : []
+    }
+
     struct Assignment: Codable, Equatable {
         var to: String
         var at: Date
@@ -332,7 +349,24 @@ final class UsagePoolController: ObservableObject {
 
     func lenders(of claude: String) -> [String] { sharing.lenders[claude] ?? [] }
 
-    var isAnyoneBorrowing: Bool { sharing.lenders.values.contains { !$0.isEmpty } }
+    private func aliases(of profile: String) -> [String] {
+        guard let url = self.profile(of: profile) else { return [profile] }
+        let path = PoolEnvironment.key(for: url)
+        return claudes.filter { self.profile(of: $0).map(PoolEnvironment.key(for:)) == path }
+    }
+
+    func automaticSwitchingEnabled(for profile: String) -> Bool {
+        aliases(of: profile).allSatisfy { sharing.automaticSwitchingEnabled(for: $0) }
+    }
+
+    func setAutomaticSwitching(_ enabled: Bool, for profile: String) {
+        guard claudes.contains(profile), automaticSwitchingEnabled(for: profile) != enabled else { return }
+        var next = sharing
+        for key in aliases(of: profile) { next.setAutomaticSwitching(enabled, for: key) }
+        save(next)
+    }
+
+    var isAnyoneBorrowing: Bool { sharing.lenders.keys.contains { !sharing.routingLenders(for: $0).isEmpty } }
 
     func addLender(_ lender: String, to claude: String) {
         guard lender != claude, !lenders(of: claude).contains(lender) else { return }
@@ -361,6 +395,7 @@ final class UsagePoolController: ObservableObject {
 
     /// One account signed in twice is one entry, holding the newer login.
     func add(_ account: PoolAccount, to claude: String) {
+        let previous = accounts
         var stored = account
         if let uuid = account.accountUuid,
            let index = accounts.firstIndex(where: { $0.accountUuid == uuid }) {
@@ -375,7 +410,10 @@ final class UsagePoolController: ObservableObject {
                 .map(preset(of:)) ?? Shortcut.IconPreset.next(besides: coloursInUse)
             accounts.append(stored)
         }
-        saveAccounts()
+        guard saveAccounts() else {
+            accounts = previous
+            return
+        }
         addLender(stored.id, to: claude)
         sync()
     }
@@ -389,28 +427,36 @@ final class UsagePoolController: ObservableObject {
     }
 
     private func save(_ next: UsageSharing) {
-        persist(next)
+        guard persist(next) else { return }
         Diagnostics.note("usage sharing changed", ["borrowers": next.lenders.count,
                                                    "lenders": next.lenders.values.map(\.count).reduce(0, +)])
         sync()
     }
 
-    private func persist(_ next: UsageSharing) {
+    @discardableResult
+    private func persist(_ next: UsageSharing) -> Bool {
+        guard write(next, to: UsagePool.settingsFile) else { return false }
         sharing = next
-        write(next, to: UsagePool.settingsFile)
+        return true
     }
 
-    private func saveAccounts() {
+    @discardableResult
+    private func saveAccounts() -> Bool {
         write(accounts, to: UsagePool.accountsFile)
     }
 
-    private func write<T: Encodable>(_ value: T, to url: URL) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        guard let data = try? JSONEncoder().encode(value) else { return }
-        FileManager.default.createFile(atPath: url.path, contents: data,
-                                       attributes: [.posixPermissions: 0o600])
+    private var storageProblem: String?
+
+    private func write<T: Encodable>(_ value: T, to url: URL) -> Bool {
+        do {
+            try UsagePool.writePrivate(JSONEncoder().encode(value), to: url)
+            storageProblem = nil
+            return true
+        } catch {
+            storageProblem = L10n.format("Could not save %@. %@", url.lastPathComponent, error.localizedDescription)
+            problem = storageProblem
+            return false
+        }
     }
 
     /// A shortcut deleted, or a draft discarded, leaves its id behind here with
@@ -418,6 +464,10 @@ final class UsagePoolController: ObservableObject {
     private func prune(against store: ShortcutStore, now: Date = Date()) {
         let known = Set([Self.mainKey] + store.shortcuts.map(Self.key(for:)) + accounts.map(\.id))
         var next = sharing
+        if let paused = next.pausedProfiles {
+            let kept = paused.intersection(known)
+            next.pausedProfiles = kept.isEmpty ? nil : kept
+        }
         for (claude, list) in next.lenders {
             let kept = known.contains(claude) ? list.filter(known.contains) : []
             next.lenders[claude] = kept.isEmpty ? nil : kept
@@ -715,6 +765,7 @@ final class UsagePoolController: ObservableObject {
         // lines taken out as well as one that started has them put in.
         let claudeProfiles = claudes.compactMap { key in profile(of: key).map { (key, $0) } }
         let assignments = sharing.assignments.mapValues(\.to)
+        let pausedProfiles = Set(claudes.filter { !automaticSwitchingEnabled(for: $0) })
 
         queue.async {
             var lending: [String: Lending] = [:]
@@ -729,8 +780,9 @@ final class UsagePoolController: ObservableObject {
                 if let account = input.account {
                     let token = key.flatMap { ClaudeCredentials.unseal(account.sealed, key: $0) }
                         .map { String(decoding: $0, as: UTF8.self) }
-                    let current = token != nil && account.expires > Date().addingTimeInterval(120)
-                    lending[input.key] = token == nil ? .unreadable : current ? .ready : .expired
+                    let authorized = account.scopes.contains(AccountSignIn.scope)
+                    let current = authorized && token != nil && account.expires > Date().addingTimeInterval(120)
+                    lending[input.key] = token == nil || !authorized ? .unreadable : current ? .ready : .expired
                     return PoolMember(id: input.key, name: input.name, account: account.accountUuid,
                                       identify: token.map { [UsagePool.digest($0)] } ?? [],
                                       token: current ? token : nil, limits: nil, borrowsFrom: nil)
@@ -746,21 +798,31 @@ final class UsagePoolController: ObservableObject {
                                   identify: login.identify, token: login.token, limits: input.limits,
                                   borrowsFrom: input.borrowsFrom)
             }
-            let configuration = PoolConfiguration(enabled: true, members: members, assignments: assignments)
+            let configuration = PoolConfiguration(enabled: true, members: members, assignments: assignments,
+                                                  primaryFirst: true)
             let journal = PoolEnvironment.readJournal()
-            let wanted = !members.isEmpty || !journal.profiles.isEmpty
+            var wants: [URL: Bool] = [:]
+            for (claude, profile) in claudeProfiles {
+                let borrows = !(sharing.lenders[claude] ?? []).isEmpty && Self.isSupported
+                if borrows || journal.profiles[PoolEnvironment.key(for: profile)] != nil {
+                    wants[profile] = borrows || wants[profile] == true
+                }
+            }
+            let legacy = ClaudeCodeEnvironment.legacyBorrowers()
+            // A configured lender alone cannot use a relay. Only start one for a
+            // profile that can actually claim it, or to keep serving existing lines.
+            let needsRelay = !journal.profiles.isEmpty || wants.contains { profile, borrow in
+                guard borrow, let key,
+                      let reading = ClaudeCodeEnvironment.read(profile, wanted: true, key: key, legacyBorrowers: legacy)
+                else { return false }
+                return reading.conflict == nil || reading.holding || ClaudeCodeEnvironment.scopedCopies(profile, key: key)
+            }
             let paused = keyShut && !members.isEmpty
-            var (status, problem) = self.deliver(configuration, wanted: wanted, complete: !keyShut)
+            var (status, problem) = self.deliver(configuration, wanted: needsRelay, complete: !keyShut,
+                                                 pausedProfiles: pausedProfiles)
 
             var environment: [String: ClaudeCodeEnvironment.State] = [:]
-            if let key, wanted {
-                var wants: [URL: Bool] = [:]
-                for (claude, profile) in claudeProfiles {
-                    let borrows = !(sharing.lenders[claude] ?? []).isEmpty && Self.isSupported
-                    if borrows || journal.profiles[PoolEnvironment.key(for: profile)] != nil {
-                        wants[profile] = borrows
-                    }
-                }
+            if let key, !wants.isEmpty || !journal.profiles.isEmpty {
                 let states = ClaudeCodeEnvironment.settle(
                     wanted: wants, key: key, relay: Self.relayExecutable?.path, relayReady: status != nil,
                     running: { Graft.isRunning(profile: $0) })
@@ -769,12 +831,16 @@ final class UsagePoolController: ObservableObject {
                 }
                 // A relay that was not needed until the lines went in.
                 if status == nil, states.values.contains(where: \.holdsLines) {
-                    (status, problem) = self.deliver(configuration, wanted: true, complete: true)
+                    (status, problem) = self.deliver(configuration, wanted: true, complete: true,
+                                                     pausedProfiles: pausedProfiles)
                 }
-            } else if wanted, key == nil {
+            } else if !wants.isEmpty || !journal.profiles.isEmpty, key == nil {
+                for (claude, profile) in claudeProfiles where legacy.contains(PoolEnvironment.key(for: profile)) {
+                    environment[claude] = .conflict(ClaudeCodeEnvironment.legacyGraftConflict, holding: false)
+                }
                 problem = problem ?? (paused
                     ? L10n.text("Lending is paused until the keychain is opened")
-                    : L10n.text("Graft needs keychain access to set up Claude Code for sharing."))
+                    : L10n.text("Claude Switcher needs keychain access to set up Claude Code for sharing."))
             }
 
             let records = self.lookUpRecords(status?.sessions ?? [], profiles: claudeProfiles)
@@ -785,7 +851,8 @@ final class UsagePoolController: ObservableObject {
                 if self.lending != lending { self.lending = lending }
                 if self.lendingPaused != paused { self.lendingPaused = paused }
                 if self.status != status { self.status = status }
-                if self.problem != problem { self.problem = problem }
+                let reportedProblem = self.storageProblem ?? problem
+                if self.problem != reportedProblem { self.problem = reportedProblem }
                 if self.environment != environment { self.environment = environment }
                 if self.filed != records.filed { self.filed = records.filed }
                 if self.focused != records.focused { self.focused = records.focused }
@@ -1127,7 +1194,7 @@ final class UsagePoolController: ObservableObject {
     /// that is not there has no Claude Code; it passes everything through as
     /// it came until a pass can tell it more.
     private func deliver(_ configuration: PoolConfiguration, wanted: Bool,
-                         complete: Bool) -> (PoolStatus?, String?) {
+                         complete: Bool, pausedProfiles: Set<String>) -> (PoolStatus?, String?) {
         guard wanted else {
             // Nobody left to serve and no Claude still pointed at it. A relay
             // still running is asked to step aside; one that is not is left
@@ -1143,9 +1210,13 @@ final class UsagePoolController: ObservableObject {
             return (nil, L10n.text("Sharing usage needs macOS 15 or later."))
         }
         guard let executable = Self.relayExecutable, let expected = Self.bundledDigest else {
-            return (nil, L10n.text("This copy of Claude Graft has no relay in it."))
+            return (nil, L10n.text("This copy of Claude Switcher has no relay in it."))
         }
-        let command = complete ? PoolCommand(configure: configuration) : PoolCommand()
+        let allowedLenders = complete ? nil : Dictionary(uniqueKeysWithValues: configuration.members.compactMap { member in
+            member.borrowsFrom.map { (member.id, $0) }
+        })
+        let command = PoolCommand(configure: complete ? configuration : nil, pausedProfiles: pausedProfiles,
+                                  allowedLenders: allowedLenders)
         let (status, reply) = Self.ask(command)
         switch Self.relayStep(reply, bundled: expected, canConfigure: complete) {
         case .keep:

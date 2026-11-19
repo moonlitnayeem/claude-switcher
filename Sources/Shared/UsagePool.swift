@@ -20,24 +20,39 @@ enum UsagePool {
     /// Fixed, because it is written into a Claude's environment while that
     /// Claude is closed, and a session already running goes on using whatever
     /// it read when it started.
-    static let port: UInt16 = 47824
+    static let port: UInt16 = 47825
     static let host = "api.anthropic.com"
 
     /// Short on purpose: the control socket lives here, and a Unix socket path
     /// longer than 103 bytes cannot be bound at all.
-    static var directory: URL { Graft.applicationSupport.appending(path: "ClaudeGraft/pool") }
+    static var directory: URL { Graft.graftFolder.appending(path: "pool") }
     static var certificateFile: URL { directory.appending(path: "relay-ca.pem") }
     static var leafFile: URL { directory.appending(path: "relay-leaf.pem") }
     static var identityFile: URL { directory.appending(path: "relay-identity.p12") }
     static var socketFile: URL { directory.appending(path: "relay.sock") }
     /// Which Claude borrows from which, and the conversations moved by hand.
-    static var settingsFile: URL { Graft.applicationSupport.appending(path: "ClaudeGraft/usage-sharing.json") }
+    static var settingsFile: URL { Graft.graftFolder.appending(path: "usage-sharing.json") }
     /// Accounts signed in through Graft, their tokens sealed.
     static var accountsFile: URL { directory.appending(path: "accounts.json") }
 
+    /// Publish a complete replacement with private permissions from its creation.
+    static func writePrivate(_ data: Data, to url: URL) throws {
+        let fm = FileManager.default
+        let parent = url.deletingLastPathComponent()
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true,
+                               attributes: [.posixPermissions: 0o700])
+        let temporary = parent.appending(path: ".write-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: temporary) }
+        guard fm.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600])
+        else { throw CocoaError(.fileWriteUnknown) }
+        guard rename(temporary.path, url.path) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
     /// The identity file sits in a folder only this user can open, so this
     /// protects nothing; the import API refuses an empty one.
-    static let identityPassphrase = "claude-graft-relay"
+    static let identityPassphrase = "claude-switcher-relay"
 
     /// The scope the token Claude hands Claude Code carries, which makes it the
     /// one to lend: the service has already accepted it for exactly this.
@@ -149,13 +164,9 @@ struct PoolLimits: Codable, Equatable {
 
 /// Which account answers a request, and in what order to fall back.
 ///
-/// The account whose week resets soonest goes first, because what it has left
-/// is the usage that expires soonest. An account is passed over once its
-/// five-hour window or its week is all but spent, and stays passed over until
-/// that window resets: utilisation only ever rises inside a window, so there
-/// is no point at which it comes back early. The account a request came from is
-/// always the last resort — when nobody has room, the request goes out exactly
-/// as Claude sent it and the service decides.
+/// The profile's own account goes first when it has capacity. Among eligible
+/// backups, use the allowance that resets soonest. When no eligible account
+/// succeeds, the service's response for the original account reaches the client.
 enum PoolPolicy {
     /// Short of a hundred because a request is checked against the limit as it
     /// starts and not as it runs, so the last one in at 99% goes through and
@@ -194,27 +205,23 @@ enum PoolPolicy {
         return reset
     }
 
-    static func hasRoom(_ limits: PoolLimits?, now: Date, model: String? = nil) -> Bool {
+    static func hasRoom(_ limits: PoolLimits?, now: Date, model: String? = nil,
+                        useMargin: Bool = false) -> Bool {
         guard let limits else { return true }
         if let until = limits.refusedUntil, until > now { return false }
         if PoolRequest.isFable(model), let until = limits.fableRefusedUntil, until > now { return false }
-        if limits.fiveHour >= fiveHourCeiling, (limits.fiveHourReset ?? .distantFuture) > now { return false }
-        if limits.week >= weekCeiling, (limits.weekReset ?? .distantFuture) > now { return false }
+        if limits.fiveHour >= (useMargin ? fiveHourCeiling : 1), (limits.fiveHourReset ?? .distantFuture) > now { return false }
+        if limits.week >= (useMargin ? weekCeiling : 1), (limits.weekReset ?? .distantFuture) > now { return false }
         return true
     }
 
-    /// The accounts to try, best first. The one the request came from is in
-    /// there wherever it ranked, or last when it has no room either, since then
-    /// the request goes out as Claude sent it and the service decides. An
-    /// account nobody has heard from yet goes after every account with a known
-    /// reset: all that is known about it is that it has not said no.
-    ///
-    /// `prefer` goes in front of the ranking, first one first, for as long as
-    /// each still has room: the account somebody chose for this conversation,
-    /// then the one already holding its cache.
+    /// Explicit conversation choices and account-bound history precede normal
+    /// routing. The original account is always available as the final fallback.
     static func order(own: String, accounts: [Account], prefer: [String] = [], now: Date,
-                      model: String? = nil) -> [String] {
-        let open = accounts.filter { $0.usable && hasRoom($0.limits, now: now, model: model) }
+                      model: String? = nil, primaryFirst: Bool = true) -> [String] {
+        let open = accounts.filter {
+            $0.usable && hasRoom($0.limits, now: now, model: model, useMargin: !primaryFirst)
+        }
         var ids = open.sorted { a, b in
             let ra = nextWeekReset(a.limits?.weekReset, now: now)
             let rb = nextWeekReset(b.limits?.weekReset, now: now)
@@ -229,7 +236,8 @@ enum PoolPolicy {
                 return a.id < b.id
             }
         }.map(\.id)
-        for id in prefer.reversed() {
+        let priority = primaryFirst ? prefer + [own] : prefer
+        for id in priority.reversed() {
             if let index = ids.firstIndex(of: id) { ids.insert(ids.remove(at: index), at: 0) }
         }
         if !ids.contains(own) { ids.append(own) }
@@ -438,10 +446,17 @@ struct PoolConfiguration: Codable, Equatable {
     /// should answer them. Kept by Graft and handed over with everything else,
     /// so a relay that restarts still knows.
     var assignments: [String: String]?
+    /// The fork defaults to primary first. Explicit false selects Graft's
+    /// earliest-reset order for clients using that policy.
+    var primaryFirst: Bool?
 }
 
 struct PoolCommand: Codable {
     var configure: PoolConfiguration?
+    /// A full snapshot of paused senders can travel without keychain credentials.
+    var pausedProfiles: Set<String>?
+    /// Current grants, even while replacing the full credential snapshot is impossible.
+    var allowedLenders: [String: [String]]?
     /// A person has reset this account's Fable allowance in the provider's settings.
     var recheckFable: String?
     /// Asks a relay built from a different binary to step aside: it stops
@@ -662,7 +677,7 @@ enum PoolCertificates {
             x509_extensions = v3_ca
             prompt = no
             [dn]
-            CN = Claude Graft relay for api.anthropic.com
+            CN = Claude Switcher relay for api.anthropic.com
             [v3_ca]
             basicConstraints = critical, CA:TRUE, pathlen:0
             keyUsage = critical, keyCertSign, cRLSign
@@ -696,7 +711,7 @@ enum PoolCertificates {
                      "-set_serial", String(serial), "-out", at("leaf.pem"), "-days", "800",
                      "-extfile", at("leaf.cnf"), "-extensions", "v3_leaf"])
         try openssl(["pkcs12", "-export", "-inkey", at("leaf.key"), "-in", at("leaf.pem"),
-                     "-certfile", at("ca.pem"), "-name", "Claude Graft relay",
+                     "-certfile", at("ca.pem"), "-name", "Claude Switcher relay",
                      "-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1",
                      "-passout", "pass:\(UsagePool.identityPassphrase)", "-out", at("identity.p12")])
         chmod(at("identity.p12"), 0o600)

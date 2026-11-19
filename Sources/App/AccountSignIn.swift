@@ -94,6 +94,7 @@ final class AccountSignIn: ObservableObject {
         case refused(Int, String?)
         case unreadable
         case ownAccount
+        case inferencePermission
         case keychain
 
         var message: String {
@@ -103,7 +104,7 @@ final class AccountSignIn: ObservableObject {
             case .timedOut:
                 return L10n.text("Nothing came back from the browser, so the sign-in was abandoned.")
             case .listener:
-                return L10n.text("Graft could not listen for the browser's answer on this Mac.")
+                return L10n.text("Claude Switcher could not listen for the browser's answer on this Mac.")
             case .declined(let reason):
                 return reason.map { L10n.format("The sign-in was not completed: %@", $0) }
                     ?? L10n.text("The sign-in was not completed.")
@@ -112,6 +113,8 @@ final class AccountSignIn: ObservableObject {
                     ?? L10n.format("Anthropic did not accept the sign-in (%ld).", status)
             case .unreadable:
                 return L10n.text("Anthropic's answer to the sign-in could not be read.")
+            case .inferencePermission:
+                return L10n.text("This account did not grant permission to send model requests.")
             case .ownAccount:
                 return L10n.text("""
                     That is the account this Claude already uses, so it has nothing to add. \
@@ -147,7 +150,7 @@ final class AccountSignIn: ObservableObject {
             // somewhere else: a stale tab, or a page poking at the port.
             guard query["state"] == state else {
                 Loopback.respond(connection, status: 400,
-                                 page: Self.page(L10n.text("This sign-in link is out of date. Start again from Claude Graft.")))
+                                 page: Self.page(L10n.text("This sign-in link is out of date. Start again from Claude Switcher.")))
                 continue
             }
             guard let code = query["code"] else {
@@ -160,7 +163,7 @@ final class AccountSignIn: ObservableObject {
             switch result {
             case .success(let account):
                 Loopback.respond(connection, status: 200, page: Self.page(
-                    L10n.format("%@ is signed in. You can close this tab and go back to Claude Graft.",
+                    L10n.format("%@ is signed in. You can close this tab and go back to Claude Switcher.",
                                 account.email ?? L10n.text("The account"))))
             case .failure(let failure):
                 Loopback.respond(connection, status: 200, page: Self.page(failure.message))
@@ -212,11 +215,12 @@ final class AccountSignIn: ObservableObject {
         let uuid = account?["uuid"] as? String
         if let uuid, uuid == ownAccount { return .failure(.ownAccount) }
 
+        let scopes = (object["scope"] as? String)?.split(separator: " ").map(String.init) ?? [Self.scope]
+        guard scopes.contains(Self.scope) else { return .failure(.inferencePermission) }
         guard let key = try? ClaudeCredentials.safeStorageKey(prompting: interactive ? .yes : .no),
               let sealed = ClaudeCredentials.seal(Data(token.utf8), key: key)
         else { return .failure(.keychain) }
         let lifetime = (object["expires_in"] as? Double) ?? Double(Self.lifetime)
-        let scopes = (object["scope"] as? String)?.split(separator: " ").map(String.init) ?? [Self.scope]
         let id = UsagePoolController.accountPrefix + (uuid ?? UUID().uuidString.lowercased())
         return .success(PoolAccount(id: id, accountUuid: uuid,
                                     email: account?["email_address"] as? String,
@@ -260,7 +264,7 @@ final class AccountSignIn: ObservableObject {
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
         return """
-            <!doctype html><html><head><meta charset="utf-8"><title>Claude Graft</title>
+            <!doctype html><html><head><meta charset="utf-8"><title>Claude Switcher</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
             :root { color-scheme: light dark; }

@@ -141,7 +141,7 @@ func chatsVisible(to profile: URL) -> [String] {
 }
 
 func sourcePath(ofBundle bundle: URL) -> String? {
-    guard let data = try? Data(contentsOf: bundle.appending(path: "Contents/Resources/graft.json")),
+    guard let data = try? Data(contentsOf: bundle.appending(path: "Contents/Resources/switcher.json")),
           let config = try? JSONDecoder().decode(GraftConfig.self, from: data)
     else { return nil }
     return config.sourceDir
@@ -183,6 +183,22 @@ do {
     catch { alsoReserved = true }
     check(alsoReserved, "the name Claude Graft is reserved too")
 
+    let foreignShortcut = makeForeignApp(named: "Earlier Shortcut")
+    let manifestDir = foreignShortcut.appending(path: "Contents/Resources")
+    try! fm.createDirectory(at: manifestDir, withIntermediateDirectories: true)
+    let foreignPlist = ["CFBundleIdentifier": "graft.earlier-shortcut"]
+    try! PropertyListSerialization.data(fromPropertyList: foreignPlist, format: .xml, options: 0)
+        .write(to: foreignShortcut.appending(path: "Contents/Info.plist"))
+    let settings = try! JSONEncoder().encode(GraftConfig(profileDir: Graft.mainProfile.path))
+    for filename in ["graft.json", "switcher.json"] {
+        try! settings.write(to: manifestDir.appending(path: filename))
+    }
+    let earlier = Shortcut(name: "Earlier Shortcut")
+    check(!Installer.isGraftBundle(foreignShortcut) && !Installer.refreshLauncher(for: earlier),
+          "a manifest on a foreign app does not let Switcher replace its launcher")
+    Installer.uninstall(earlier)
+    check(isIntact(foreignShortcut), "the foreign app survives removal of a same-name shortcut")
+    try? fm.removeItem(at: foreignShortcut)
     try? fm.removeItem(at: claude)
     try? fm.removeItem(at: other)
 }
@@ -355,7 +371,7 @@ do {
           "replacing the complete shortcut preserves its new signature")
 
     let sealedFiles = ["Contents/MacOS/launcher", "Contents/Info.plist",
-                       "Contents/Resources/graft.json", "Contents/Resources/icon.icns",
+                       "Contents/Resources/switcher.json", "Contents/Resources/icon.icns",
                        "Contents/_CodeSignature/CodeResources"]
     let before = sealedFiles.map { try! Data(contentsOf: bundle.appending(path: $0)) }
     Installer.iconSourceOverride = root.appending(path: "unreadable-icon.png")
@@ -400,7 +416,7 @@ do {
     try! fm.copyItem(at: Bundle.main.executableURL!, to: binary)
     let stale = try! Data(contentsOf: binary)
     let plist: [String: Any] = [
-        "CFBundleIdentifier": "graft.legacy",
+        "CFBundleIdentifier": Installer.shortcutIDPrefix + "legacy",
         "CFBundleExecutable": "launcher",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.0.1",
@@ -409,7 +425,7 @@ do {
     try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         .write(to: bundle.appending(path: "Contents/Info.plist"))
     try! JSONEncoder().encode(GraftConfig(profileDir: shortcut.profileDir.path))
-        .write(to: resources.appending(path: "graft.json"))
+        .write(to: resources.appending(path: "switcher.json"))
 
     check(Installer.refreshLauncher(for: shortcut),
           "a legacy shortcut gets a fresh launcher")
@@ -436,10 +452,10 @@ do {
     check(chatsVisible(to: main) == ["local_mine.json", "local_shared.json"],
           "and the profile lent from ends up holding both of them too")
 
-    let ownFolder = work.appending(path: "claude-code-sessions/BBBB/.ORG-B.graft-own")
+    let ownFolder = work.appending(path: "claude-code-sessions/BBBB/.ORG-B.switcher-own")
     check(fm.fileExists(atPath: ownFolder.appending(path: "local_mine.json").path),
           "its own chats are stashed, not destroyed")
-    check(!fm.fileExists(atPath: work.appending(path: "claude-code-sessions/BBBB/ORG-B.graft-own").path),
+    check(!fm.fileExists(atPath: work.appending(path: "claude-code-sessions/BBBB/ORG-B.switcher-own").path),
           "the stash is hidden, so it cannot be read back as an organization")
 
     let config = Graft.configJSON(of: work)
@@ -632,7 +648,7 @@ do {
                     atomically: true, encoding: .utf8)
 
     Graft.ungraft(work)
-    check(!Graft.exists(work.appending(path: "claude-code-sessions/BBBB/.ORG-B.graft-own")),
+    check(!Graft.exists(work.appending(path: "claude-code-sessions/BBBB/.ORG-B.switcher-own")),
           "ungrafting folds the stash back in rather than abandoning it beside the copies")
     check(chatsVisible(to: work) == ["local_mine.json"],
           "so the profile is handed back what it owned")
@@ -705,6 +721,8 @@ do {
     try? fm.createDirectory(at: graftOwn, withIntermediateDirectories: true)
     let graftMarker = graftOwn.appending(path: "graft-deletion-marker")
     try? Data("x".utf8).write(to: graftMarker)
+    check(refusal(support.appending(path: "ClaudeSwitcher")) == .graftFolder,
+          "the fork's support folder is protected")
     check(refusal(graftOwn) == .graftFolder, "Graft's own folder is refused")
     check(refusal(support.appending(path: "claudegraft")) == .graftFolder,
           "and so is it in lower case")
@@ -1480,17 +1498,16 @@ do {
     check(russian["New Shortcut"] == "Новый ярлык", "the Russian catalog is actually translated")
     let rebasedKeys = ["Claude Desktop is updating", "Claude Desktop %@ is available",
                        "Preparing the update…", "%@ · Up to date",
-                       "Check for Claude Updates", "Check for Claude Graft Updates",
-                       "Checking for Claude Graft Updates…", "Update Claude Desktop manually",
+                       "Check for Claude Updates", "Download Updates…", "Update Claude Desktop manually",
                        "Update Claude…", "Update Claude Desktop?", "Quit All Claude & Update",
                        "Chats found elsewhere", "Merge Them Here", "Copy Them Here",
                        "Open Without Them", "Do Not Show Again", "Leave Closed", "Dismiss",
-                       "Hold Claude Graft updates", "Install Claude Graft %@"]
+                       "Automatic switching"]
     check(rebasedKeys.allSatisfy { english[$0] != nil && russian[$0] != nil },
           "the update UI added upstream is localized too")
     let russianBundle = Bundle(path: repo.appending(path: "Resources/ru.lproj").path)!
-    check(russianBundle.localizedString(forKey: "Check for Claude Graft Updates", value: nil, table: nil)
-            == "Проверить обновления Claude Graft",
+    check(russianBundle.localizedString(forKey: "Download Updates…", value: nil, table: nil)
+            == russian["Download Updates…"] && russian["Download Updates…"] != "Download Updates…",
           "the current update action resolves through the Russian bundle")
     let recovered = russianBundle.localizedString(
         forKey: "Recovered %lld sessions that closed without records", value: nil, table: nil)
@@ -1544,194 +1561,28 @@ do {
           "a shortcut built by something that is not an app is stamped unmistakably")
 }
 
-// MARK: - Updating itself
+// MARK: - Fork release distribution
 
-section("Updates")
+section("Updates and support")
 
 do {
     let repo = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent()
     func read(_ path: String) -> String {
         (try? String(contentsOf: repo.appending(path: path), encoding: .utf8)) ?? ""
     }
     let plist = read("Resources/Info.plist")
-
-    // The feed is baked into every copy ever shipped and cannot be changed for
-    // one already installed, so it is worth being sure about.
-    check(plist.contains("<key>SUFeedURL</key><string>https://"),
-          "the update feed is fetched over https")
-    check(plist.contains("<key>SUPublicEDKey</key>") && !plist.contains("<key>SUPublicEDKey</key><string></string>"),
-          "and an update is refused unless it is signed by the key shipped alongside it")
-
-    // Two places name the account, and a rename that touched only one would
-    // leave the feed advertising downloads nobody can reach.
-    let release = read("release.sh")
-    let owner = "aaditya-v-more"
-    check(plist.contains("https://\(owner).github.io/"),
-          "the feed and the release assets agree on whose account they are")
-    check(release.contains("github.com/\(owner)/claude-graft/releases/download/"),
-          "so a download the feed advertises resolves to something")
-
-    // Fetched over the wire, then trusted to verify every future update.
-    let fetch = read("Tools/fetch-sparkle.sh")
-    check(fetch.contains("SHA256=\"") && fetch.contains("VERSION=\""),
-          "the update framework is pinned to one version and one checksum")
-
-    // Present, they need entitlements and signing this app does not do, and
-    // launchd refuses them for a non-sandboxed app.
-    check(read("build.sh").contains("XPCServices"),
-          "Sparkle's XPC services are stripped from the embedded copy")
-
-    // Sparkle starts the new version by ending this one, and this app refuses a
-    // terminate nobody asked for. Missing that is what left an update installed
-    // and never started, twice. Sparkle's own header says the relaunch hook may
-    // not be called, so one place to set the flag is not enough.
-    let updater = read("Sources/App/Updater.swift")
-    let marks = updater.components(separatedBy: "isRelaunchingForUpdate = true").count - 1
-    check(marks >= 3,
-          "the terminate is marked as asked-for at every hook before an install, not just one")
-    check(updater.contains("automaticallyDownloadsUpdates = true"),
-          "an update installs itself rather than waiting to be noticed")
-    check(updater.contains("immediateInstallHandler()"),
-          "and now, rather than on a quit that a menu bar app may not see for weeks")
-
-    // Sparkle's interactive check puts up a panel and waits on Install and
-    // Relaunch. The scheduled check installed silently and the button did not,
-    // which is one app behaving two ways — and pressing a line that already
-    // reads "version 1.0.6 is available" is not a request to be asked about it.
-    check(updater.contains("checkForUpdatesInBackground()"),
-          "the dropdown's check installs rather than asking")
-    check(!updater.contains("updater.checkForUpdates()"),
-          "so Sparkle's own panel is never what a press puts on screen")
-
-    // A hold is only a hold if nothing else can download. Sparkle schedules
-    // its launch check as it starts, so a controller started before the hold
-    // was applied would fetch and install the held version on the way up.
-    check(updater.contains("startingUpdater: false") && updater.contains("controller.startUpdater()"),
-          "the updater is configured before it starts")
-    if let applied = updater.range(of: "apply(holding: settings.holdUpdates)"),
-       let started = updater.range(of: "controller.startUpdater()") {
-        check(applied.lowerBound < started.lowerBound,
-              "and the hold is in place before Sparkle's first check can run")
-    } else {
-        check(false, "and the hold is in place before Sparkle's first check can run")
-    }
-    check(updater.contains("checkForUpdateInformation()"),
-          "a hold looks for updates with a probe, which downloads nothing")
-    // Sparkle ties background downloading to its own schedule unless the
-    // bundle says otherwise, and a hold turns the schedule off. Without the
-    // key, pressing Install on a held version did nothing at all.
-    check(read("Resources/Info.plist").contains("<key>SUAllowsAutomaticUpdates</key><true/>"),
-          "a press installs a held version even with Sparkle's schedule off")
-    let menu = read("Sources/App/MenuBarContent.swift")
-    check(menu.contains("updater.install()") && menu.contains("HoldUpdatesControl()"),
-          "the dropdown offers the held version and the switch that holds it")
-    check(read("Sources/App/ClaudeGraftApp.swift").contains("HoldUpdatesControl()"),
-          "and so does the settings window")
-
-    // The app carries links of its own to the site and the source, compiled
-    // into copies that will never be built again. GitHub redirects a renamed
-    // repository but gives Pages nothing, so a rename that missed one of these
-    // would take it quietly dead.
-    let links = read("Sources/App/Links.swift")
-    let site = read("docs/index.html")
-    let readme = read("README.md")
-    check(links.contains("static let owner = \"\(owner)\""),
-          "the app sends people to the same account the feed does")
-    check(site.contains("github.com/\(owner)/claude-graft"),
-          "and so does the site")
-
-    // The tip jar is a second account under a second spelling. GitHub Sponsors
-    // cannot pay into an Indian account, so the money goes through Ko-fi, whose
-    // handle carries no hyphens — neither name can be built out of the other,
-    // which is why all four places are read rather than derived from one.
-    let kofi = "aadityavmore"
-    check(links.contains("static let kofiAccount = \"\(kofi)\"") && links.contains("https://ko-fi.com/"),
-          "the app's support link goes to the tip jar")
-    check(read(".github/FUNDING.yml").contains("ko_fi: \(kofi)"),
-          "and so does the button at the top of the repository")
-    check(site.contains("https://ko-fi.com/\(kofi)"),
-          "and the one on the site")
-    check(readme.contains("https://ko-fi.com/\(kofi)"),
-          "and the one in the README")
-
-    // The Help menu is the one place someone stuck inside the app looks for a
-    // person, so every way to reach one has to be there and has to be right.
-    check(links.contains("static let email = \"aadityavmore@gmail.com\""),
-          "the Help menu writes to the developer's own address")
-    check(links.contains("https://www.linkedin.com/in/aadityavmore/"),
-          "and links to the developer's LinkedIn profile")
-    let mail = Links.mail(version: "2.0.0", system: "Version 26.1")
-    let mailParts = URLComponents(url: mail, resolvingAgainstBaseURL: false)
-    check(mail.scheme == "mailto" && mailParts?.path == "aadityavmore@gmail.com",
-          "an email from Help goes to that address")
-    check(mailParts?.queryItems?.first { $0.name == "subject" }?.value == "Claude Graft 2.0.0"
-            && mailParts?.queryItems?.first { $0.name == "body" }?.value?.contains("macOS Version 26.1") == true,
-          "and already says which Graft and which macOS it comes from")
-    for item in ["Claude Graft Help", "Report a Problem…", "Email the Developer…",
-                 "Aaditya More on LinkedIn", "View Source on GitHub", "Support Claude Graft…"] {
-        check(links.contains("L10n.text(\"\(item)\")"), "the Help menu offers \(item)")
-    }
-    check(read("Sources/App/ClaudeGraftApp.swift").contains("GraftHelpCommands()"),
-          "and replaces SwiftUI's help-isn't-available item")
-
-    // A sponsor page nobody can pay into is worse than no link at all: it reads
-    // as an oversight rather than a decision, and it takes a press to find out
-    // that the money has nowhere to go.
-    check(![links, site, readme].contains(where: { $0.contains("github.com/sponsors") }),
-          "and nothing still offers the sponsor page that cannot take the money")
-
-    // An enclosure without a signature is one every client refuses, and
-    // generate_appcast omits it silently when the key does not match.
-    let appcast = read("docs/appcast.xml")
-    if !appcast.isEmpty {
-        let enclosures = appcast.components(separatedBy: "<enclosure ").dropFirst()
-        check(!enclosures.isEmpty && enclosures.allSatisfy { $0.contains("sparkle:edSignature") },
-              "every download the published feed offers carries a signature")
-
-        // generate_appcast prunes to a few entries per branch point by default,
-        // so each release quietly dropped the oldest one. Nothing broke — the
-        // newest is what gets offered — but the signature in an entry is over
-        // an archive that is never built again, so a dropped entry is not one
-        // that can be regenerated later.
-        check(release.contains("--maximum-versions 0"),
-              "the feed keeps every release it has ever carried")
-        check(release.contains("[ \"$AFTER\" -eq \"$((BEFORE + 1))\" ]"),
-              "and a run that adds one while losing another is caught, not waved through")
-    }
-
-    // Every older entry is signed, so a search of the whole feed found a
-    // signature whether or not the new entry had one.
-    check(release.contains("ENTRY=\"$(awk -v zip=\"ClaudeGraft-$VERSION.zip\"")
-            && release.contains("grep -q \"sparkle:edSignature=\\\"[^\\\"]\" <<< \"$ENTRY\"")
-            && release.contains("grep -q \"length=\\\"$ZIP_SIZE\\\"\" <<< \"$ENTRY\"")
-            && release.contains("</sparkle:minimumAutoupdateVersion>\" <<< \"$ENTRY\""),
-          "the release asks the new entry itself for its signature, its length and the floor")
-    check(release.contains("[ \"$SIGNED_AFTER\" -eq \"$((SIGNED_BEFORE + 1))\" ]"),
-          "and counts signatures like the items, so an old one lost on the way is caught")
-    check(!release.contains("-o \"$ROOT/docs/appcast.xml\"") && release.contains("-o \"$FEED\""),
-          "the feed is generated beside the archives, not in the live file")
-    if let copied = release.range(of: "cp \"$FEED\" \"$ROOT/docs/appcast.xml\""),
-       let cask = release.range(of: "TAP_READY=\"yes\""),
-       let signed = release.range(of: "appcast has a signed entry for"),
-       let install = release.range(of: "if [ \"${1:-}\" = \"--install\" ]") {
-        check(signed.lowerBound < copied.lowerBound && cask.lowerBound < copied.lowerBound
-                && copied.lowerBound < install.lowerBound,
-              "and the live file gets it only once every check and the cask have passed")
-    } else {
-        check(false, "and the live file gets it only once every check and the cask have passed")
-    }
-
-    // A Mac on 1.0.x is offered the newest entry and asked about it with that
-    // entry's notes, so every release is the one that stops to ask.
-    let version = read("VERSION").trimmingCharacters(in: .whitespacesAndNewlines)
-    let notes = read("docs/release-notes/\(version).html")
-    check(notes.contains("from 1.0.x"),
-          "this version's notes say what upgrading from 1.0.x does to chats")
-    check(release.contains("grep -q \"from 1\\.0\\.x\" \"$NOTES\"")
-            && !release.contains("elif [ \"$VERSION\" = \"$CONFIRM_BELOW\" ]"),
-          "and the release refuses any version whose notes are missing or do not say it")
+    let source = "https://github.com/moonlitnayeem/claude-switcher"
+    check(Links.source.absoluteString == source, "Source opens the fork")
+    check(Links.releases.absoluteString == source + "/releases", "updates open the fork's releases")
+    check(Links.newIssue.absoluteString.hasPrefix(source + "/issues/"), "problem reports go to the fork")
+    check(plist.contains("<string>com.moonlitnayeem.claude-switcher</string>"),
+          "the fork has its own application identifier")
+    check(!plist.contains("SUFeedURL") && !read("build.sh").contains("Sparkle.framework"),
+          "the bundle cannot auto-install an upstream Graft release")
+    check(read("Sources/App/MenuBarContent.swift").contains("Links.releases"),
+          "the menu opens the release page when the user chooses to check")
+    check(read("build.sh").contains("$ROOT/LICENSE"), "distributions include the MIT license")
 }
 
 // MARK: - Who is allowed to put a keychain dialog on screen
@@ -2187,7 +2038,7 @@ do {
           "a shortcut for a different profile is refused")
     check(try! ProfileOpener.destination(profile: Graft.mainProfile, shortcut: nil) == .main,
           "only the actual default profile selects the default launch route")
-    try! Data("broken".utf8).write(to: wrong.appending(path: "Contents/Resources/graft.json"))
+    try! Data("broken".utf8).write(to: wrong.appending(path: "Contents/Resources/switcher.json"))
     check(ProfileOpener.bundle(for: other) == nil,
           "an unreadable profile description is not trusted because its name matches")
     try? fm.removeItem(at: wrong)
@@ -3687,7 +3538,7 @@ do {
     try? fm.removeItem(at: Graft.claudeProjects)
     try? fm.removeItem(at: Graft.sessionRecordStateFile)
     let list = Graft.applicationSupport
-        .appending(path: "ClaudeGraft")
+        .appending(path: "ClaudeSwitcher")
         .appending(path: "shortcuts.json")
     try? fm.removeItem(at: list)
 
@@ -4078,7 +3929,7 @@ do {
     // What a released version left on disk: the profile's own chats in the
     // stash and a link where they used to be. Built by hand because nothing
     // in this app makes one any more, which is the point of the test.
-    let ownStash = ownOrg.deletingLastPathComponent().appending(path: ".OWNORG.graft-own")
+    let ownStash = ownOrg.deletingLastPathComponent().appending(path: ".OWNORG.switcher-own")
     try! fm.createDirectory(at: ownStash, withIntermediateDirectories: true)
     try! "{}".write(to: ownStash.appending(path: "local_mine.json"),
                     atomically: true, encoding: .utf8)
@@ -4722,7 +4573,7 @@ do {
     let profile = makeProfile("Claude-Saved", account: "VOWN", org: "VOWNORG")
     let shortcut = Shortcut(name: "Saved", folder: "Claude-Saved", source: .own)
     let bundle = try! Installer.install(shortcut, sourceDir: src)
-    let configFile = bundle.appending(path: "Contents/Resources/graft.json")
+    let configFile = bundle.appending(path: "Contents/Resources/switcher.json")
 
     let written = try! JSONDecoder().decode(GraftConfig.self,
                                             from: Data(contentsOf: configFile))
@@ -4766,7 +4617,7 @@ do {
     // that did, so this cannot be gated on the version the way the launcher is.
     try! Data("not json".utf8).write(to: configFile)
     check(Installer.refreshConfig(for: shortcut, sourceDir: nil),
-          "a graft.json that will not parse is rewritten rather than trusted")
+          "a switcher.json that will not parse is rewritten rather than trusted")
     Installer.uninstall(shortcut)
 }
 
@@ -4880,7 +4731,7 @@ do {
     let store = profile.appending(path: "claude-code-sessions/EEEE/ORG-E")
     try? fm.removeItem(at: profile)
     try! fm.createDirectory(at: store, withIntermediateDirectories: true)
-    try! fm.createDirectory(at: store.deletingLastPathComponent().appending(path: ".ORG-E.graft-own"),
+    try! fm.createDirectory(at: store.deletingLastPathComponent().appending(path: ".ORG-E.switcher-own"),
                             withIntermediateDirectories: true)
 
     // A pass has already found it missing once, so the next one withdraws it.
@@ -4894,7 +4745,7 @@ do {
 
     // With the stash gone the folder is the profile's own again, and an empty
     // one really is a sidebar someone cleared.
-    try! fm.removeItem(at: store.deletingLastPathComponent().appending(path: ".ORG-E.graft-own"))
+    try! fm.removeItem(at: store.deletingLastPathComponent().appending(path: ".ORG-E.switcher-own"))
     Graft.saveSessionRecordState(Graft.SessionRecordState(records: ["e-1": store.path],
                                                           vanished: ["e-1"]))
     Graft.fileMissingSessionRecords(filingInto: [profile], now: Date())
@@ -4950,7 +4801,7 @@ do {
     check(!Graft.isStashedAway(org),
           "a folder with nothing put away above it is not a folder this app stashed")
 
-    let sibling = org.deletingLastPathComponent().appending(path: ".ORG-W.graft-own")
+    let sibling = org.deletingLastPathComponent().appending(path: ".ORG-W.switcher-own")
     try! fm.createDirectory(at: sibling, withIntermediateDirectories: true)
     check(Graft.isStashedAway(org),
           "a stash beside the organization folder is the shape a cross-account graft leaves")
@@ -4958,7 +4809,7 @@ do {
 
     // Exactly what `openForMirror` does to a store on a same-account first pass.
     try! fm.moveItem(at: profile.appending(path: "claude-code-sessions"),
-                     to: profile.appending(path: ".claude-code-sessions.graft-own"))
+                     to: profile.appending(path: ".claude-code-sessions.switcher-own"))
     try! fm.createDirectory(at: profile.appending(path: "claude-code-sessions"),
                             withIntermediateDirectories: true)
     check(Graft.isStashedAway(org),
@@ -4982,13 +4833,13 @@ do {
     makeTranscript(session: session, owner: account, org: org, title: "Borrowed")
 
     let store = profile.appending(path: "claude-code-sessions")
-    try! fm.moveItem(at: store, to: profile.appending(path: ".claude-code-sessions.graft-own"))
+    try! fm.moveItem(at: store, to: profile.appending(path: ".claude-code-sessions.switcher-own"))
     try! fm.createDirectory(at: store, withIntermediateDirectories: true)
 
     Graft.fileMissingSessionRecords(filingInto: [profile], now: Date())
     check(!Graft.exists(store.appending(path: account).appending(path: org)),
           "a sweep does not build an organization folder back up inside a store this app emptied")
-    check(Graft.exists(profile.appending(path: ".claude-code-sessions.graft-own")
+    check(Graft.exists(profile.appending(path: ".claude-code-sessions.switcher-own")
                         .appending(path: account).appending(path: org)
                         .appending(path: "local_mine.json")),
           "and the profile's real history stays where the graft put it")
@@ -5027,7 +4878,7 @@ do {
     check(Graft.exists(mine.appending(path: "local_own-1.json"))
           && Graft.exists(mine.appending(path: "local_own-2.json")),
           "a source holding nothing under this account leaves the profile's own chats where they are")
-    check(!Graft.exists(borrower.appending(path: ".local-agent-mode-sessions.graft-own")),
+    check(!Graft.exists(borrower.appending(path: ".local-agent-mode-sessions.switcher-own")),
           "and nothing of the profile's goes to the stash on the strength of a share that cannot happen")
     check(Graft.exists(borrower.appending(path: "claude-code-sessions")
                         .appending(path: account).appending(path: "ORG-S")
@@ -5649,7 +5500,7 @@ do {
     try? fm.removeItem(at: profile)
     try! fm.createDirectory(at: profile.appending(path: "claude_desktop_config.json"),
                             withIntermediateDirectories: true)
-    let stash = profile.appending(path: ".claude_desktop_config.json.graft-own")
+    let stash = profile.appending(path: ".claude_desktop_config.json.switcher-own")
     try! "the profile's own".write(to: stash, atomically: true, encoding: .utf8)
 
     let source = support.appending(path: "Claude-Odd-Source")
@@ -5707,7 +5558,7 @@ do {
     // nothing looks wrong from inside the app, but the sidebar is short.
     let store = other.appending(path: "claude-code-sessions")
         .appending(path: borrower).appending(path: org)
-    let stash = store.deletingLastPathComponent().appending(path: ".\(org).graft-own")
+    let stash = store.deletingLastPathComponent().appending(path: ".\(org).switcher-own")
     try! fm.createDirectory(at: stash, withIntermediateDirectories: true)
     for chat in ["r-3", "r-4", "r-5"] {
         try! "{}".write(to: stash.appending(path: "local_\(chat).json"),
@@ -5901,9 +5752,9 @@ do {
     check(writes == 1, "an unchanged sidebar does not rewrite either database")
     disk[one.path]!.pins = []; disk[one.path]!.order = []
     refuse = true
-    let baseline = try! Data(contentsOf: isolated.appending(path: "ClaudeGraft/sidebar-sync.json"))
+    let baseline = try! Data(contentsOf: isolated.appending(path: "ClaudeSwitcher/sidebar-sync.json"))
     SidebarSync.synchronize(beforeOpening: two)
-    check((try! Data(contentsOf: isolated.appending(path: "ClaudeGraft/sidebar-sync.json"))) == baseline,
+    check((try! Data(contentsOf: isolated.appending(path: "ClaudeSwitcher/sidebar-sync.json"))) == baseline,
           "a failed storage write cannot advance the sidebar baseline")
     refuse = false
     SidebarSync.synchronize(beforeOpening: two)
@@ -5913,7 +5764,7 @@ do {
     SidebarSync.synchronize(beforeOpening: one)
     check(writes == before, "switching accounts cannot apply pins from the previous account's pair")
     Graft.saveMirrorState(Graft.MirrorState())
-    let dropped = try! JSONSerialization.jsonObject(with: Data(contentsOf: isolated.appending(path: "ClaudeGraft/sidebar-sync.json"))) as! [String:Any]
+    let dropped = try! JSONSerialization.jsonObject(with: Data(contentsOf: isolated.appending(path: "ClaudeSwitcher/sidebar-sync.json"))) as! [String:Any]
     check((dropped["pairs"] as? [String:Any])?.isEmpty == true,
           "returning to independent histories forgets the old sidebar agreement")
     let beforeReads = reads
@@ -5959,7 +5810,7 @@ do {
                    observed: now)
     }
     func order(_ accounts: [PoolPolicy.Account], prefer: [String] = []) -> [String] {
-        PoolPolicy.order(own: "own", accounts: accounts, prefer: prefer, now: now)
+        PoolPolicy.order(own: "own", accounts: accounts, prefer: prefer, now: now, primaryFirst: false)
     }
     let soon = PoolPolicy.Account(id: "soon", limits: limits(weekReset: day), usable: true)
     let later = PoolPolicy.Account(id: "later", limits: limits(weekReset: 5 * day), usable: true)
@@ -6206,10 +6057,10 @@ do {
           "and a login read whole always says what it says")
     check(UsagePool.digest("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
           "a login is known to the relay by its SHA-256 alone")
-    check(PoolEnvironment.lines == ["HTTPS_PROXY": "http://127.0.0.1:47824",
+    check(PoolEnvironment.lines == ["HTTPS_PROXY": "http://127.0.0.1:47825",
                                     "NODE_EXTRA_CA_CERTS": UsagePool.certificateFile.path],
           "Claude Code is pointed at a port on this Mac alone, and told to trust the relay's own certificate")
-    check(UsagePool.certificateFile.path.hasSuffix("ClaudeGraft/pool/relay-ca.pem"),
+    check(UsagePool.certificateFile.path.hasSuffix("ClaudeSwitcher/pool/relay-ca.pem"),
           "which is kept with Graft's state")
 
     let pool = UsagePoolController()
@@ -6235,6 +6086,21 @@ do {
     check(pool.accounts.count == 1 && pool.accounts.first?.id == "account:a" && pool.accounts.first?.sealed == "second",
           "one account signed in twice is one entry, holding the newer login")
     check(pool.lenders(of: main) == ["account:a"], "and is lent once")
+    let oldSettings = Data(#"{"lenders":{"main":["account:a"]},"assignments":{}}"#.utf8)
+    check((try? JSONDecoder().decode(UsageSharing.self, from: oldSettings))?.routingLenders(for: main) == ["account:a"],
+          "settings from before the switch keep their configured backups")
+    pool.assign("test-pause-chat", to: "account:a")
+    pool.setAutomaticSwitching(false, for: main)
+    let reopened = UsagePoolController()
+    check(!reopened.automaticSwitchingEnabled(for: main) && reopened.sharing.routingLenders(for: main).isEmpty,
+          "restarting the app keeps a paused profile on its own account")
+    check(reopened.automaticSwitchingEnabled(for: "elsewhere") && reopened.lenders(of: main) == ["account:a"]
+            && reopened.accounts.first?.sealed == "second" && reopened.sharing.assignments["test-pause-chat"]?.to == "account:a",
+          "pausing preserves the signed-in account, its assignment and other profiles' settings")
+    pool.setAutomaticSwitching(true, for: main)
+    check(UsagePoolController().sharing.routingLenders(for: main) == ["account:a"],
+          "turning the switch on restores routing with the saved account")
+    pool.assign("test-pause-chat", to: nil)
     check(pool.name(of: "account:a") == "a@example.com" && pool.name(of: main) == "Claude",
           "a signed-in account goes by its address, Claude's own profile by its name")
     pool.add(account("account:a", uuid: "a", sealed: "third"), to: "elsewhere")
@@ -6322,6 +6188,28 @@ do {
     check(corporateReading?.conflict == "HTTPS_PROXY" && corporateReading?.entry.wanted == false
             && corporateReading?.holding == false,
           "a proxy of the person's own is theirs, whatever its case, and is left alone")
+    let graftPool = Graft.applicationSupport.appending(path: "ClaudeGraft/pool")
+    let upstreamEnvironment = seal(["HTTPS_PROXY": "http://127.0.0.1:47824",
+                                    "NODE_EXTRA_CA_CERTS": graftPool.appending(path: "relay-ca.pem").path])
+    let legacy = profile("legacy-router", ["envVars": upstreamEnvironment])
+    let legacyFile = legacy.appending(path: PoolEnvironment.fileName)
+    let originalBytes = try! Data(contentsOf: legacyFile)
+    let protected = ClaudeCodeEnvironment.settle(wanted: [legacy: true], key: key, relay: nil,
+                                                 relayReady: true, running: { _ in false })
+    check(protected[PoolEnvironment.key(for: legacy)] == .conflict(ClaudeCodeEnvironment.legacyGraftConflict, holding: false)
+            && (try? Data(contentsOf: legacyFile)) == originalBytes,
+          "a profile already routed by Graft keeps its connection settings byte for byte")
+    let pending = profile("pending-legacy", nil)
+    let pendingKey = PoolEnvironment.key(for: pending)
+    let oldJournal = graftPool.appending(path: "environment.json")
+    try! fm.createDirectory(at: graftPool, withIntermediateDirectories: true)
+    try! JSONSerialization.data(withJSONObject: ["profiles": [pendingKey: ["wanted": true]]]).write(to: oldJournal)
+    let pendingStates = ClaudeCodeEnvironment.settle(wanted: [pending: true], key: key, relay: nil,
+                                                    relayReady: true, running: { _ in false })
+    check(pendingStates[pendingKey] == .conflict(ClaudeCodeEnvironment.legacyGraftConflict, holding: false)
+            && !fm.fileExists(atPath: pending.appending(path: PoolEnvironment.fileName).path),
+          "a pending claim in Graft keeps Switcher from racing to claim even a closed profile")
+    try? fm.removeItem(at: oldJournal)
     let scopedOwn = seal([:])
     let scoped = profile("scoped", ["envVars": scopedOwn,
                                     "scopedEnvVars": ClaudeCredentials.seal(

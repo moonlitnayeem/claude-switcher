@@ -45,6 +45,7 @@ actor PoolState {
     static let conversationMemory: TimeInterval = 24 * 60 * 60
 
     private var configuration: PoolConfiguration?
+    private var pausedProfiles: Set<String> = []
     private var memberByDigest: [String: String] = [:]
     private var lendingDigest: [String: String] = [:]
     private var runtime: [String: Runtime] = [:]
@@ -66,20 +67,34 @@ actor PoolState {
         configuration?.members.first { $0.id == id }?.account ?? id
     }
 
+    func updateRouting(_ replacement: PoolConfiguration?, paused: Set<String>?, allowedLenders: [String: [String]]?) {
+        if let paused { pausedProfiles = paused }
+        if let replacement {
+            configure(replacement)
+        } else if let allowedLenders, var existing = configuration {
+            // A locked keychain can still revoke permission. New grants wait
+            // until this relay can receive fresh identities and credentials.
+            for index in existing.members.indices {
+                let member = existing.members[index]
+                let allowed = Set(allowedLenders[member.id] ?? [])
+                existing.members[index].borrowsFrom = member.borrowsFrom?.filter(allowed.contains)
+            }
+            configuration = existing
+        }
+    }
+
     func configure(_ new: PoolConfiguration, now: Date = Date()) {
         configuration = new
-        memberByDigest = [:]
+        var owners: [String: Set<String>] = [:]
         lendingDigest = [:]
         var kept: [String: Runtime] = [:]
         for member in new.members {
-            for digest in member.identify where memberByDigest[digest] == nil {
-                memberByDigest[digest] = member.id
-            }
+            for digest in member.identify { owners[digest, default: []].insert(member.id) }
             var state = runtime[member.id] ?? Runtime()
             if let token = member.token {
                 let digest = UsagePool.digest(token)
                 lendingDigest[member.id] = digest
-                if memberByDigest[digest] == nil { memberByDigest[digest] = member.id }
+                owners[digest, default: []].insert(member.id)
                 if state.refusedToken != digest { state.refusedToken = nil }
             }
             // The service's own headers are fresher than any poll while the
@@ -91,6 +106,9 @@ actor PoolState {
             }
             kept[member.id] = state
         }
+        // The proxy sees only the bearer. When two distinct senders share it,
+        // choosing either one's permissions could borrow an unauthorized account.
+        memberByDigest = owners.compactMapValues { $0.count == 1 ? $0.first : nil }
         runtime = kept
         // An account nobody names any more is forgotten with its members, so
         // what is held stays the size of what Graft describes.
@@ -105,8 +123,12 @@ actor PoolState {
     }
 
     func recheckFable(_ id: String, now: Date = Date()) {
-        guard let member = configuration?.members.first(where: { $0.id == id }),
-              member.token != nil, runtime[id]?.refusedToken == nil else { return }
+        guard let configuration, configuration.enabled,
+              let member = configuration.members.first(where: { $0.id == id }) else { return }
+        let original = member.borrowsFrom != nil && !pausedProfiles.contains(id)
+            && member.identify.contains { memberByDigest[$0] == id }
+        let lendable = member.token != nil && runtime[id]?.refusedToken == nil
+        guard original || lendable else { return }
         let key = member.account ?? id
         guard fableRechecks[key] == nil,
               let reading = limits[key], (reading.fableRefusedUntil ?? .distantPast) > now,
@@ -159,19 +181,19 @@ actor PoolState {
     func plan(own: String, session: String?, pinned: Bool, bound: Bool = false, model: String? = nil,
               continuing: Bool = false, now: Date = Date()) -> [Attempt] {
         let asSent = [Attempt(member: own, token: nil)]
-        guard let configuration, configuration.enabled, !pinned,
+        guard let configuration, configuration.enabled, !pinned, !pausedProfiles.contains(own),
               let sender = configuration.members.first(where: { $0.id == own })
         else { return asSent }
         func canLend(_ member: PoolMember) -> Bool {
             member.token != nil && runtime[member.id]?.refusedToken != lendingDigest[member.id]
         }
         let candidates = Self.candidates(for: sender, in: configuration.members, canLend: canLend)
-        guard candidates.count > 1 else { return asSent }
+        guard candidates.count > 1 || fableRechecks[accountKey(own)] != nil else { return asSent }
         var recheck: String?
         let accounts = candidates.map { member in
             let key = member.account ?? member.id
             var reading = limits[key]
-            if recheck == nil, member.id != own, PoolRequest.isFable(model), canLend(member),
+            if recheck == nil, PoolRequest.isFable(model), member.id == own || canLend(member),
                (reading?.fableRefusedUntil ?? .distantPast) > now, PoolPolicy.hasRoom(reading, now: now),
                let requested = fableRechecks[key] {
                 switch requested {
@@ -195,6 +217,7 @@ actor PoolState {
             let account = configuration.members.first { $0.id == id }.map { $0.account ?? $0.id } ?? id
             return candidates.first { ($0.account ?? $0.id) == account }?.id
         }
+        let primaryFirst = configuration.primaryFirst ?? true
         var prefer: [String] = []
         var holder: String?
         if let session {
@@ -203,7 +226,7 @@ actor PoolState {
                 prefer.append(id)
             }
             if let last = held?.servedBy,
-               bound || now.timeIntervalSince(held!.lastAt) < held!.cacheLifetime {
+               bound || (!primaryFirst && now.timeIntervalSince(held!.lastAt) < held!.cacheLifetime) {
                 // Reasoning outlives the cache: it is lost on any other account
                 // however long the conversation sat. So it stays until its
                 // account has no room, and then stays wherever it went, which
@@ -219,16 +242,18 @@ actor PoolState {
         // the sender's own account is where it began.
         if bound, holder == nil { prefer.append(own) }
         if let recheck { prefer.insert(recheck, at: 0) }
-        var ids = PoolPolicy.order(own: own, accounts: accounts, prefer: prefer, now: now, model: model)
+        var ids = PoolPolicy.order(own: own, accounts: accounts, prefer: prefer, now: now,
+                                   model: model, primaryFirst: primaryFirst)
         // The last word is always the sender's own account, asked again if it
         // was asked already: whatever the lent accounts answered last — a
         // refused login, a plan without the model, a limit with their own
         // reset times — is about a login Claude Code never sent.
         if ids.last != own { ids.append(own) }
         return ids.map { id in
-            if id == own { return Attempt(member: own, token: nil) }
-            var attempt = Attempt(member: id, token: candidates.first { $0.id == id }?.token)
+            let token = id == own ? nil : candidates.first { $0.id == id }?.token
+            var attempt = Attempt(member: id, token: token)
             if id == recheck {
+                recheck = nil
                 let ticket = UUID()
                 fableRechecks[accountKey(id)] = .sending(ticket)
                 attempt.fableRecheck = ticket

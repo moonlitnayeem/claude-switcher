@@ -10,19 +10,17 @@ struct SharedUsageSection: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var usage: UsageMonitor
     @ObservedObject private var pool = Shared.usagePool
-    @ObservedObject private var signIn = Shared.accountSignIn
     @State private var problem: String?
 
     static let explanation = L10n.text("""
-        The Code tab in this Claude can be answered by the accounts added here. Each \
-        request goes to whichever has room and the soonest weekly reset, and a \
-        conversation stays on one account while its cache is still warm there. \
-        Chats, artifacts, connectors and Claude in Chrome stay with this Claude's \
-        own account, and the Chat tab is never shared.
+        Claude Code uses this profile’s primary account first. When it reaches a limit, \
+        an available backup can answer the next request. Some conversations need the \
+        account that created their thread. You can choose an account for a conversation \
+        from the menu bar.
 
-        A request answered by another account carries the conversation to that \
-        account. Anthropic's terms for Claude plans may not allow one person to \
-        combine subscriptions this way, so read them before adding one.
+        A request sent through a backup includes its conversation. The Chat tab, artifacts, \
+        connectors and Claude in Chrome use this profile’s own account. Review Anthropic’s \
+        terms for your plans before combining subscriptions.
         """)
 
     var body: some View {
@@ -49,81 +47,16 @@ struct SharedUsageSection: View {
             // Adding is in the heading, where it belongs to the whole list
             // and costs no row of its own.
             SectionHeader(title: "Shared usage", info: Self.explanation, id: "shared-usage-info") {
-                if UsagePoolController.isSupported { headerTrailing }
+                if UsagePoolController.isSupported { RoutingAccountActions(claude: claude) }
             }
         }
     }
 
     private var lenders: [String] { pool.lenders(of: claude) }
 
-    /// Other Claudes and accounts already signed in elsewhere, then a new one.
-    private var candidates: [String] {
-        let taken = Set(lenders + [claude])
-        return (pool.claudes + pool.accounts.map(\.id)).filter { !taken.contains($0) }
-    }
-
     /// A section with nothing in it draws an empty box under its heading.
     private var showsNothing: Bool {
         lenders.isEmpty && noteLines.isEmpty
-    }
-
-    private var isSigningIn: Bool {
-        if case .waiting(claude) = signIn.phase { return true }
-        return false
-    }
-
-    private var addMenu: some View {
-        Menu {
-            ForEach(candidates, id: \.self) { key in
-                Button(pool.name(of: key)) { pool.addLender(key, to: claude) }
-            }
-            if !candidates.isEmpty { Divider() }
-            Button("Sign In to Another Account…") { signIn.start(for: claude, interactive: true) }
-                .disabled(isSigningIn)
-        } label: {
-            Label(lenders.isEmpty ? "Add an Account" : "Add Another Account", systemImage: "plus")
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .identified("shared-usage.add")
-    }
-
-    /// A sign-in under way, or one that failed, stands where Add is while it
-    /// lasts: Add has nothing to offer then, and a row of its own pushed the
-    /// list past the bottom of the window.
-    @ViewBuilder
-    private var headerTrailing: some View {
-        switch signIn.phase {
-        case .waiting(claude):
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Finish signing in in your browser.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .identified("shared-usage.signing-in")
-                // A bare "Cancel" in a list of every control says nothing
-                // about what it would stop.
-                Button("Cancel") { signIn.cancel() }
-                    .controlSize(.small)
-                    .accessibilityLabel(L10n.text("Cancel Signing In"))
-                    .identified("shared-usage.cancel-sign-in")
-            }
-        case .failed(claude, let message):
-            HStack(spacing: 6) {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-                    .help(message)
-                    .identified("shared-usage.sign-in-failed")
-                Button("OK") { signIn.dismissFailure() }
-                    .controlSize(.small)
-                    .identified("shared-usage.dismiss-sign-in-failure")
-            }
-        default:
-            addMenu
-        }
     }
 
     /// One line at most, whatever needs saying. Three of them under the list
@@ -184,6 +117,82 @@ struct SharedUsageSection: View {
             return nil
         }
     }
+}
+
+struct RoutingAccountActions: View {
+    let claude: String
+    @EnvironmentObject private var store: ShortcutStore
+    @ObservedObject private var pool = Shared.usagePool
+    @ObservedObject private var signIn = Shared.accountSignIn
+    private var lenders: [String] { pool.lenders(of: claude) }
+
+    /// Other Claudes and accounts already signed in elsewhere, then a new one.
+    private var candidates: [String] {
+        let taken = Set(lenders + [claude])
+        let profiles = [UsagePoolController.mainKey] + store.shortcuts.filter { !store.isDraft($0) }
+            .map(UsagePoolController.key)
+        return (profiles + pool.accounts.map(\.id)).filter { !taken.contains($0) }
+    }
+
+    private var isSigningIn: Bool {
+        if case .waiting(claude) = signIn.phase { return true }
+        return false
+    }
+
+    private var addMenu: some View {
+        Menu {
+            ForEach(candidates, id: \.self) { key in
+                Button(pool.name(of: key)) { pool.addLender(key, to: claude) }
+            }
+            if !candidates.isEmpty { Divider() }
+            Button("Sign In to Another Account…") { signIn.start(for: claude, interactive: true) }
+                .disabled(isSigningIn)
+        } label: {
+            Label(lenders.isEmpty ? "Add an Account" : "Add Another Account", systemImage: "plus")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .identified("shared-usage.add")
+    }
+
+    /// A sign-in under way, or one that failed, stands where Add is while it
+    /// lasts: Add has nothing to offer then, and a row of its own pushed the
+    /// list past the bottom of the window.
+    @ViewBuilder
+    var body: some View {
+        switch signIn.phase {
+        case .waiting(claude):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Finish signing in in your browser.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .identified("shared-usage.signing-in")
+                // A bare "Cancel" in a list of every control says nothing
+                // about what it would stop.
+                Button("Cancel") { signIn.cancel() }
+                    .controlSize(.small)
+                    .accessibilityLabel(L10n.text("Cancel Signing In"))
+                    .identified("shared-usage.cancel-sign-in")
+            }
+        case .failed(claude, let message):
+            HStack(spacing: 6) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .help(message)
+                    .identified("shared-usage.sign-in-failed")
+                Button("OK") { signIn.dismissFailure() }
+                    .controlSize(.small)
+                    .identified("shared-usage.dismiss-sign-in-failure")
+            }
+        default:
+            addMenu
+        }
+    }
+
 }
 
 private struct LenderRow: View {

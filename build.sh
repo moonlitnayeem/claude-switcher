@@ -1,134 +1,66 @@
 #!/bin/bash
-# Builds Claude Graft.app into ./build.noindex. No Xcode project involved;
-# swiftc is enough for a single-window SwiftUI app plus the small launcher
-# binary.
-#
-#   ./build.sh                    one slice, for this machine
-#   GRAFT_UNIVERSAL=1 ./build.sh  arm64 and x86_64, for shipping
+# Build a native debug copy with ./build.sh, or set SWITCHER_UNIVERSAL=1 for distribution.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-# Spotlight skips any directory whose name ends in .noindex, and that suffix is
-# the whole reason this one is spelled that way. A development build is a
-# complete, launchable Claude Graft.app, so an ordinary build directory puts a
-# second one in Spotlight beside the installed copy — indistinguishable, and
-# the wrong one to open. Two instances then poll the same profiles, race for
-# the same keychain prompt, and Sparkle updates a bundle nobody installed.
-BUILD="$ROOT/build.noindex"
-APP="$BUILD/Claude Graft.app"
-DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET:-13.0}"
-
-# The one place the number is written down. Everything else — the bundle, the
-# zip, the tag — reads it from here.
+BUILD="${SWITCHER_BUILD_DIR:-$ROOT/build.noindex}"
+IDENTITY="${SWITCHER_SIGN_IDENTITY:--}"
+DEPLOYMENT="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
-
-# A build for this machine only has to run on it. A build being shipped has to
-# run on machines nobody here can test, and an Intel Mac given an arm64-only
-# bundle reports nothing more useful than a bounce in the Dock.
-if [ -n "${GRAFT_UNIVERSAL:-}" ]; then
-    ARCHES="arm64 x86_64"
-else
-    ARCHES="$(uname -m)"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+APP="$WORK/Claude Switcher.app"
+CONTENTS="$APP/Contents"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources" "$BUILD"
+archs=("$(uname -m)")
+if [[ "${SWITCHER_UNIVERSAL:-0}" == 1 ]]; then
+    archs=(arm64 x86_64)
 fi
+sign_flags=(--force --sign "$IDENTITY" --options runtime)
+if [[ "$IDENTITY" != "-" ]]; then sign_flags+=(--timestamp); fi
 
-# Whoever signs, signs everything: a framework left carrying the ad-hoc
-# signature inside an app signed with a Developer ID is a mixed bundle, which
-# notarisation rejects. release.sh sets these; a plain build gets ad-hoc.
-IDENTITY="${GRAFT_SIGNING_IDENTITY:--}"
-SIGN_FLAGS="${GRAFT_SIGN_FLAGS:-}"
-
-"$ROOT/Tools/fetch-sparkle.sh"
-
-rm -rf "$BUILD"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-SLICES="$(mktemp -d)"
-trap 'rm -rf "$SLICES"' EXIT
-
-# Builds one binary per architecture and joins them. lipo is skipped for a
-# single slice so an ordinary build stays one compile.
 compile() {
-    local output="$1"; shift
-    local built=()
-    for arch in $ARCHES; do
-        local slice="$SLICES/$(basename "$output").$arch"
-        swiftc -O -swift-version 5 \
-            -target "$arch-apple-macos$DEPLOYMENT_TARGET" \
-            "$@" -o "$slice"
-        built+=("$slice")
+    local output="$1" arch slice
+    shift
+    local slices=() jobs=() job failed=0
+    for arch in "${archs[@]}"; do
+        slice="$WORK/$(basename "$output").$arch"
+        swiftc -O -whole-module-optimization -swift-version 5 \
+            -target "$arch-apple-macos$DEPLOYMENT" "$@" -o "$slice" &
+        jobs+=("$!")
+        slices+=("$slice")
     done
-    if [ "${#built[@]}" -eq 1 ]; then
-        mv "${built[0]}" "$output"
+    for job in "${jobs[@]}"; do
+        if ! wait "$job"; then failed=1; fi
+    done
+    if [[ "$failed" == 1 ]]; then return 1; fi
+    if [[ "${#slices[@]}" == 1 ]]; then
+        mv "${slices[0]}" "$output"
     else
-        lipo -create "${built[@]}" -output "$output"
+        lipo -create "${slices[@]}" -output "$output"
     fi
 }
 
-echo "building launcher"
-compile "$APP/Contents/Resources/graft-launch" \
-    "$ROOT/Sources/Shared/GraftCore.swift" \
-    "$ROOT/Sources/Shared/SidebarSync.swift" \
-    "$ROOT/Sources/Shared/SidebarStorage.swift" \
-    "$ROOT/Sources/Shared/Diagnostics.swift" \
-    "$ROOT/Sources/Shared/ManualUpdates.swift" \
-    "$ROOT/Sources/Shared/ClaudeUpdateGate.swift" \
-    "$ROOT/Sources/Shared/UsagePool.swift" \
-    "$ROOT/Sources/Shared/PoolEnvironment.swift" \
-    "$ROOT/Sources/Launcher/main.swift"
+shared=("$ROOT"/Sources/Shared/*.swift)
+echo "Compiling Claude Switcher and its helpers for ${archs[*]}"
+compile "$CONTENTS/Resources/graft-launch" "${shared[@]}" "$ROOT/Sources/Launcher/main.swift"
+compile "$CONTENTS/Resources/graft-relay" "${shared[@]}" "$ROOT"/Sources/Relay/*.swift
+compile "$CONTENTS/MacOS/ClaudeSwitcher" "${shared[@]}" "$ROOT"/Sources/App/*.swift
 
-# A process of its own so that it goes on answering while Graft is quit: a
-# Claude told to use a proxy that is not there cannot reach the service at all.
-echo "building relay"
-compile "$APP/Contents/Resources/graft-relay" \
-    "$ROOT"/Sources/Shared/*.swift \
-    "$ROOT"/Sources/Relay/*.swift
-
-echo "building app"
-compile "$APP/Contents/MacOS/ClaudeGraft" \
-    -F "$ROOT/vendor" -framework Sparkle \
-    "$ROOT/Sources/Shared/GraftCore.swift" \
-    "$ROOT/Sources/Shared/SidebarSync.swift" \
-    "$ROOT/Sources/Shared/SidebarStorage.swift" \
-    "$ROOT/Sources/Shared/Diagnostics.swift" \
-    "$ROOT/Sources/Shared/ManualUpdates.swift" \
-    "$ROOT/Sources/Shared/ClaudeUpdateGate.swift" \
-    "$ROOT/Sources/Shared/UsagePool.swift" \
-    "$ROOT/Sources/Shared/PoolEnvironment.swift" \
-    "$ROOT"/Sources/App/*.swift
-
-echo "embedding Sparkle"
-FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
-ditto "$ROOT/vendor/Sparkle.framework" "$FRAMEWORK"
-
-# Graft is not sandboxed, so Sparkle's XPC services do nothing for it, and
-# removing them avoids the nested-entitlements dance and the launchd refusals
-# that non-sandboxed apps hit with them present. The version letter is globbed
-# because Sparkle has not always used B, and a silent no-op here would leave
-# nested XPC for a --deep sign to trip over.
-rm -rf "$FRAMEWORK"/Versions/*/XPCServices
-rm -f "$FRAMEWORK/XPCServices"
-
-# The binary was linked against @rpath/Sparkle.framework; this is what makes it
-# resolve inside the bundle rather than wherever it was built from.
-install_name_tool -add_rpath "@executable_path/../Frameworks" \
-    "$APP/Contents/MacOS/ClaudeGraft" 2>/dev/null
-
-# --deep is right here and wrong on the outer bundle: the framework's own nested
-# helpers (Autoupdate, Updater.app) need signing, and doing it now means the app
-# signature below seals a framework that is already settled.
-codesign --force --deep $SIGN_FLAGS --sign "$IDENTITY" "$FRAMEWORK" >/dev/null
-
-cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy \
-    -c "Set :CFBundleShortVersionString $VERSION" \
-    -c "Set :CFBundleVersion $VERSION" \
-    "$APP/Contents/Info.plist" >/dev/null
-if [ -f "$ROOT/Resources/AppIcon.icns" ]; then
-    cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
-fi
+cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
+    -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
+cp "$ROOT/Resources/AppIcon.icns" "$ROOT/LICENSE" "$CONTENTS/Resources/"
 for localization in "$ROOT"/Resources/*.lproj; do
-    ditto "$localization" "$APP/Contents/Resources/$(basename "$localization")"
+    ditto --noextattr --norsrc "$localization" "$CONTENTS/Resources/$(basename "$localization")"
 done
-
-codesign --force $SIGN_FLAGS --sign "$IDENTITY" "$APP" >/dev/null
-
-echo "built $APP ($VERSION, $ARCHES)"
+for helper in graft-launch graft-relay; do
+    codesign "${sign_flags[@]}" --identifier "com.moonlitnayeem.claude-switcher.$helper" \
+        "$CONTENTS/Resources/$helper"
+done
+codesign "${sign_flags[@]}" "$APP"
+codesign --verify --deep --strict "$APP"
+# Only replace this product's bundle, leaving other builds and test results intact.
+rm -rf "$BUILD/Claude Switcher.app"
+ditto --noextattr --norsrc "$APP" "$BUILD/Claude Switcher.app"
+codesign --verify --deep --strict "$BUILD/Claude Switcher.app"
+echo "Built $BUILD/Claude Switcher.app ($VERSION)"

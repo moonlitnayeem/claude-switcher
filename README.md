@@ -1,126 +1,40 @@
-<div align="center">
+# Claude Switcher
 
-<img src="docs/assets/icon.png" width="120" alt="Claude Graft">
+Claude Switcher is a macOS menu bar app for people who use Claude Code in Claude Desktop with more than one account. Keep working in the same profile and with the same model. When your primary account reaches a usage limit, Switcher can send an eligible request to a backup account you have connected.
 
-<h1>Claude Graft</h1>
+[Download Claude Switcher for macOS](https://github.com/moonlitnayeem/claude-switcher/releases/latest) · [Release history](https://github.com/moonlitnayeem/claude-switcher/releases) · [Report a problem](https://github.com/moonlitnayeem/claude-switcher/issues)
 
-<p>
-  <b>1× is less but 5× is too much.</b> <i>(Or 20× is less, lol.)</i><br>
-  One Claude login is never quite the right amount.
-</p>
+![The Routing window showing automatic switching, a primary and a backup account, and the last account to answer. The screenshot uses fictional accounts.](docs/images/switcher-routing.png)
 
-<p>
-  <a href="https://github.com/aaditya-v-more/claude-graft/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/aaditya-v-more/claude-graft?style=for-the-badge&logo=github&logoColor=white&labelColor=1C1A17&color=C2410C"></a>
-  <a href="https://github.com/aaditya-v-more/claude-graft/releases"><img alt="Total downloads" src="https://img.shields.io/github/downloads/aaditya-v-more/claude-graft/total?style=for-the-badge&logo=github&logoColor=white&label=Total%20downloads&labelColor=1C1A17&color=C2410C"></a>
-  <a href="https://github.com/aaditya-v-more/homebrew-claude-graft"><img alt="Homebrew cask" src="https://img.shields.io/badge/Homebrew-cask-C2410C?style=for-the-badge&logo=homebrew&logoColor=white&labelColor=1C1A17"></a>
-  <img alt="macOS 13+" src="https://img.shields.io/badge/macOS-13%2B-C2410C?style=for-the-badge&logo=apple&logoColor=white&labelColor=1C1A17">
-  <a href="https://github.com/aaditya-v-more/claude-graft/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/aaditya-v-more/claude-graft?style=for-the-badge&logo=github&logoColor=white&labelColor=1C1A17&color=C2410C"></a>
-  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/github/license/aaditya-v-more/claude-graft?style=for-the-badge&labelColor=1C1A17&color=C2410C"></a>
-  <a href="https://ko-fi.com/aadityavmore"><img alt="Support this on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=kofi&logoColor=white&labelColor=1C1A17"></a>
-</p>
+## Get started
 
-<p>
-  <a href="https://aaditya-v-more.github.io/claude-graft/"><b>Website</b></a>
-  &nbsp;·&nbsp;
-  <a href="#install"><b>Install</b></a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/aaditya-v-more/claude-graft/releases"><b>Releases</b></a>
-</p>
+1. Open the **DMG**, drag **Claude Switcher** to **Applications**, and open it. The app runs on Apple silicon and Intel Macs with macOS 13 or later. Automatic account switching requires macOS 15 or later and Claude Desktop.
+2. Open **Routing** and choose the Claude profile you want to use. Under **Accounts**, choose **Add an Account**. Select another profile you already use, or choose **Sign In to Another Account…**.
+3. Turn on **Automatic switching** for that profile. If Switcher prompts for Keychain access, allow it to use the sign-ins you selected. If the dashboard asks you to reopen the profile, finish any active work and reopen it once so Claude Code picks up the local connection.
+4. Use Claude Code normally. **Routing activity** shows the account and model that answered the last successful request. When a later request fails, its result is shown separately.
 
-<br>
+Turn the switch off at any time to use only the profile's own account for new requests. Your backup list and sign-ins are saved for the next time you turn it on.
 
-<img src="docs/images/00-shared-usage.png" width="820" alt="A Claude lending Claude Code usage from Claude 2 and another account">
+## What happens at a limit
 
-</div>
+Switcher tries the profile's own account first for an ordinary Claude Code inference request. If that account is limited, it tries eligible backups assigned to the profile. A conversation explicitly assigned to an account or tied to an account-owned thread can keep that account. Requests referencing account-owned files, connectors or other resources stay with their owner. Chat and Cowork continue to use their existing accounts.
 
-Claude Graft runs every Claude account you have side by side, each signed in
-on its own profile, and lets them share their usage. It lives in the menu bar.
+Fable can have a separate limit even when the account still has weekly usage available. Switcher tracks the reported Fable reset independently. If the provider has already reset the allowance, choose **Recheck Fable** next to that account. The next eligible Fable request can check it once. Switcher keeps the model you selected. If every eligible account declines the request, Claude shows the provider's limit.
 
-## Install
+During a relay update, active responses can finish and idle connections reconnect to the new relay. The dashboard shows the last observed request, so you can see what actually happened.
 
-```sh
-brew install --cask aaditya-v-more/claude-graft/claude-graft
-```
+## If you already use Claude Graft
 
-Or take the **.dmg** from
-[Releases](https://github.com/aaditya-v-more/claude-graft/releases). Graft needs
-macOS 13 and Claude Desktop; sharing usage needs macOS 15. It is ad-hoc signed,
-not notarised, so the first open needs **System Settings › Privacy & Security**
-(the cask does this for you).
+Switcher has its own settings, application identifier, relay and saved sign-ins. You can open it alongside Graft to explore the dashboard. Each Claude profile can use one router at a time. To try Switcher while Graft is handling ongoing work, use a separate profile that Graft is not routing.
 
-## Shared usage
+To move a profile, first finish its active work. In Graft, remove that profile's shared-usage assignments and close the profile once so Graft can restore its connection settings. Graft may forget a backup sign-in when its last assignment is removed. Add that account in Switcher, enable automatic switching for the profile and reopen it. Switcher reports a conflict while Graft still manages the connection.
 
-When one account runs out, Claude Code carries on with another's allowance,
-without leaving the Claude you are in. Under **Shared usage**, add another of
-your Claudes or sign in to an account. Only the model's answers come from the
-other account; your chats, files and connectors stay where they are.
+## How the local connection works
 
-Sharing sends that Claude's Claude Code through a small relay Graft runs. Before
-you remove Graft, take away the accounts each Claude borrows and close those
-Claudes once, which puts their Code settings back as they were. If Graft goes
-first, the relay puts each Claude back as it closes, then stops.
+Automatic switching uses a loopback relay and a local certificate limited to the Anthropic API hostname. The selected profile's Claude Code environment points to that relay. Switcher can forward eligible model requests using a backup's authorization, so use accounts that are yours or that you are authorized to use. Saved sign-ins are stored locally in encrypted form. The app does not install a system-wide proxy.
 
-## A Claude for every account
+## Build from source
 
-**New Shortcut** makes a small app that opens Claude on a profile of its own.
-Sign in once and it stays signed in. A new Claude has its own chats; reading
-another Claude's chats is a choice you make.
+On macOS with the Swift toolchain, run `./build.sh`. The app is written to `build.noindex/Claude Switcher.app`. Use `./test.sh` for app and policy checks, `./test-relay.sh` for loopback routing integration tests, and `./test-layout.sh` for the window and accessibility checks. See `release.sh` for universal builds, signing and notarization.
 
-<img src="docs/images/01-claudes.png" width="820" alt="Graft's window with Claude 2 selected">
-
-<img src="docs/images/02-new-claude.png" width="820" alt="A new Claude, reading its own chats">
-
-## The menu bar
-
-The menu bar says which Claude is in front, with its icon and its account's
-usage, and its name too if you like. While a Claude shares usage, the bar shows
-every account it draws on and rings the one answering right now in red, and the
-conversation on screen runs across it with that account's name, so you always
-know who is answering the chat in front of you. An older chat that no account
-has answered since you began sharing shows by its name alone. Archive or delete
-a conversation and it leaves the bar. The dropdown lists every account's
-five-hour and weekly usage, kept current while the Claudes are closed, and lets
-you pick which account answers each conversation, with a tick beside the one in
-force.
-
-<img src="docs/images/03-dropdown.png" width="346" alt="Graft's menu bar dropdown with each account's usage">
-
-## Artifacts, projects and chats
-
-Sign in with an emailed code and see every account's artifacts, projects and
-chats in one place. Share an artifact with a group, each person as a viewer,
-commenter or editor; rename, duplicate, delete, or export it as Markdown, PDF,
-Word or page source.
-
-<img src="docs/images/05-artifacts.png" width="820" alt="Artifacts from two accounts">
-
-<img src="docs/images/06-group-roles.png" width="820" alt="A group with a role beside each person">
-
-<img src="docs/images/07-share-menu.png" width="820" alt="Sharing an artifact with a group">
-
-<img src="docs/images/08-artifact-actions.png" width="263" alt="An artifact's Rename, Duplicate, Export and Delete">
-
-<img src="docs/images/09-projects.png" width="820" alt="Projects from two accounts">
-
-<img src="docs/images/10-search.png" width="820" alt="Searching chats across accounts">
-
-## Safe by design
-
-Graft borrows each Claude's login rather than copying it, and its tokens go to
-Anthropic alone. It never touches an app it did not make. Updating keeps every
-Claude, setting and chat exactly as it was.
-
-<img src="docs/images/11-settings.png" width="420" alt="Graft's Settings">
-
-## Help
-
-The Help menu has the guide, what's new, a way to report a problem and to
-reach me.
-
-<img src="docs/images/12-help-menu.png" width="450" alt="Graft's Help menu">
-
-Made by Aaditya More: [aadityavmore@gmail.com](mailto:aadityavmore@gmail.com),
-[LinkedIn](https://www.linkedin.com/in/aadityavmore/),
-[issues](https://github.com/aaditya-v-more/claude-graft/issues/new). Graft is
-free; the [tip jar](https://ko-fi.com/aadityavmore) keeps it going. Build it
-with `./build.sh`. [MIT](LICENSE).
+Claude Switcher is an independent fork of Claude Graft for macOS. The original project was created by Aaditya Vitthal More and released under the MIT license. Claude and Claude Desktop are Anthropic products. [Original project](https://github.com/aaditya-v-more/claude-graft) · [Original website](https://aaditya-v-more.github.io/claude-graft/) · [Creator website](https://aadityamore.com/) · [GitHub](https://github.com/aaditya-v-more) · [LinkedIn](https://www.linkedin.com/in/aadityavmore/) · [MIT license](LICENSE)

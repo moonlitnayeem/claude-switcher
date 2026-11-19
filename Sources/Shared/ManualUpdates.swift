@@ -41,7 +41,7 @@ enum ManualUpdates {
         }
     }
 
-    static var stateFile: URL { Graft.applicationSupport.appending(path: "ClaudeGraft/manual-updates.json") }
+    static var stateFile: URL { Graft.graftFolder.appending(path: "manual-updates.json") }
     private static let lock = NSLock()
     private static let policyKeys = ["disableAutoUpdates", "autoUpdate.disabled"]
 

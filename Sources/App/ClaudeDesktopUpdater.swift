@@ -82,7 +82,7 @@ final class ClaudeDesktopUpdater: ObservableObject {
     private var pendingResume: Run?
     private var confirming = false
 
-    static var directory: URL { Graft.applicationSupport.appending(path: "ClaudeGraft/DesktopUpdate.noindex") }
+    static var directory: URL { Graft.graftFolder.appending(path: "DesktopUpdate.noindex") }
     static var profile: URL { directory.appending(path: "Profile") }
     private static var journal: URL { directory.appending(path: "run.json") }
     private static var log: URL { Graft.fm.homeDirectoryForCurrentUser.appending(path: "Library/Logs/Claude/main.log") }

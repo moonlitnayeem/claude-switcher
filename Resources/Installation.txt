@@ -1,0 +1,10 @@
+Claude Switcher for macOS
+
+Drag Claude Switcher into the Applications folder, then open it from Applications.
+You can eject this disk image once the copy is complete.
+
+Claude Switcher works with the Claude Desktop app already installed on your Mac.
+Account switching requires macOS 15 or later.
+
+Source, updates and help:
+https://github.com/moonlitnayeem/claude-switcher

@@ -22,8 +22,8 @@ let resources = executable            // .../Contents/MacOS/launcher
     .deletingLastPathComponent()      // .../Contents
     .appending(path: "Resources")
 
-let configURL = Bundle.main.url(forResource: "graft", withExtension: "json")
-    ?? resources.appending(path: "graft.json")
+let configURL = Bundle.main.url(forResource: "switcher", withExtension: "json")
+    ?? resources.appending(path: "switcher.json")
 
 guard let data = try? Data(contentsOf: configURL),
       let config = try? JSONDecoder().decode(GraftConfig.self, from: data)

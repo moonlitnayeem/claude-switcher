@@ -31,7 +31,7 @@ final class SessionRecords: ObservableObject {
     /// another is asked for is left to finish; the write it is headed for
     /// refuses to land twice.
     func sweep(_ store: ShortcutStore) {
-        guard !inFlight else { return }
+        guard !inFlight, store.shortcuts.contains(where: { $0.installedName != nil }) else { return }
         inFlight = true
 
         var filing: [URL] = [Graft.mainProfile]

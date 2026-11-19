@@ -1,70 +1,21 @@
 # Security
 
-## Reporting something
+## Report a vulnerability
 
-Use the **Security** tab on this repository and choose *Report a vulnerability*,
-which opens a private advisory only the maintainer can see. If that is not
-available to you, open an ordinary issue saying you have something to report and
-nothing else, and you will be asked for a private channel.
+Open a private advisory for the Claude Switcher fork. If GitHub does not offer private reporting, open an issue requesting a private contact channel. Share the Switcher version, macOS version, affected feature and the minimum steps needed to understand the report. Keep account addresses, tokens, session cookies, conversation contents and Keychain data out of public reports. [Private reporting](https://github.com/moonlitnayeem/claude-switcher/security/advisories/new) · [Fork issues](https://github.com/moonlitnayeem/claude-switcher/issues/new)
 
-Please do not post a working exploit in a public issue. There is nothing here
-worth an embargo of any length, so expect a fix and a release rather than a
-process.
+## Accounts and local data
 
-## What Graft touches
+Claude Switcher reads the access token in a configured Claude Desktop profile using that profile’s local credentials and the macOS login Keychain. It uses access tokens for usage checks, explicitly requested session starts and routing. Claude Desktop owns its login and refresh token.
 
-Graft reads the access token Claude Desktop already holds for each profile,
-decrypting it out of `config.json` with the key in the login keychain — the same
-key Claude itself uses. It does that to ask Anthropic what an account's usage
-looks like, to open a session window when you press the button for it, and,
-when you set a Claude up to share usage, to answer that Claude's Claude Code
-requests from another of your accounts.
+Signing in a backup opens the provider’s authorization page. Switcher exchanges the returned authorization code with the provider and seals the backup login with the local safe-storage key. Switcher keeps its account records and relay state under `~/Library/Application Support/ClaudeSwitcher/`. Treat that folder as private. The Artifacts, Projects and Search Chats features use separate claude.ai browser stores for the accounts signed into those features.
 
-These things are true of that, and a report that one of them has stopped being
-true is the kind worth sending:
+## Routing
 
-Only access tokens are ever decrypted, never the refresh token. Anthropic
-rotates refresh tokens, and using one would sign Claude Desktop out. An account
-signed in from Graft for shared usage is given a refresh token too, and Graft
-never reads it.
+Configured Claude Code profiles connect to a relay on the Mac’s loopback interface. The relay receives configuration over a local Unix socket. Its local certificate authority is constrained to `api.anthropic.com`, and its signing key is discarded after the server certificate is issued. Requests to other hosts pass through the tunnel. Claude Code receives per-profile proxy and certificate settings when the profile is closed. Switcher detects an existing Graft route or custom connection as a conflict.
 
-Nothing is written back to Claude's login. Not to its `config.json`, not to its
-cookies, not to the keychain. Claude's safe-storage key seals two things of
-Graft's own: the Claude Code setting it writes into a closed profile for shared
-usage, and the logins signed in from Graft, kept in Graft's own folder.
+When an alternate account answers a model request, the conversation content in that request goes to Anthropic under the answering account. The dashboard shows the account and model recorded by the relay. Files under `pool/`, Keychain exports and conversation files contain sensitive material and should stay on the Mac.
 
-A token goes to `api.anthropic.com` and nowhere else, over HTTPS, as a bearer
-token. Signing in an account for shared usage sends only the browser's one-time
-code to `platform.claude.com`. Graft has no server, no telemetry and no account
-of its own.
+## Downloads and signing
 
-The claude.ai sign-ins behind the Artifacts, Projects and Search Chats panes are
-made on claude.ai's own page, in a window of Graft's, and each stays in a web
-store of its own that only claude.ai's pages are loaded into. Graft never reads
-the cookie out of it and never sends it anywhere; requests are made from a
-claude.ai page, so the browser engine sends it to claude.ai alone. Claude
-Desktop's own cookies are never decrypted.
-
-The relay that carries shared usage listens on `127.0.0.1` only, takes its
-instructions over a socket only your user can open, and holds the logins it is
-lent in memory. It unwraps connections to `api.anthropic.com` alone, with a
-certificate from an authority Graft makes on your Mac whose name constraint
-permits that one name; the authority's private key is deleted as soon as the
-certificate is signed, and its identity is never written to the keychain.
-Everything else passes through it as bytes.
-
-The keychain is asked once, and only when asking is the way through. Every
-read is tried silently first, so a build already trusted by the keychain item
-raises no dialog at all.
-
-## Known and not a vulnerability
-
-The app is ad-hoc signed rather than notarised, because notarisation needs a
-paid Apple developer account. The Homebrew cask clears the quarantine flag at
-install time and the command it runs is in the cask file. This is documented in
-the README, and it is a deliberate trade rather than an oversight.
-
-Updates are fetched over HTTPS and verified against an EdDSA public key that
-ships inside the app, so an update Sparkle will install has been signed by the
-key that made the release. A report that this verification can be skipped is
-very much a vulnerability; the ad-hoc signature by itself is not.
+Download packages and SHA-256 checksums from this fork’s GitHub Releases. The checksum identifies the published download. For each release, the notes describe its Developer ID signature and Apple notarization status. Local developer builds can use an ad-hoc signature. Use the release’s documented signature and notarization details when assessing provenance. [Claude Switcher releases](https://github.com/moonlitnayeem/claude-switcher/releases)

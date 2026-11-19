@@ -2,47 +2,14 @@ import AppKit
 import Foundation
 import SwiftUI
 
-/// The addresses this app sends people to.
-///
-/// One account name, spelled once. The site and the source both hang off it,
-/// and a build already installed keeps whatever it was compiled with — so a
-/// rename that touched one of the two would leave a dead link in every copy out
-/// in the world.
-///
-/// The tip jar is a second account somewhere else entirely, and it is spelled
-/// differently. GitHub Sponsors cannot pay into an Indian account, so the money
-/// goes through Ko-fi, whose handle carries no hyphens — nothing may derive one
-/// name from the other. The suite reads both spellings out of this file and
-/// checks the site, the README and `.github/FUNDING.yml` against them.
 enum Links {
-    static let owner = "aaditya-v-more"
-    static let kofiAccount = "aadityavmore"
-
-    static let site = URL(string: "https://\(owner).github.io/claude-graft/")!
-    static let source = URL(string: "https://github.com/\(owner)/claude-graft")!
-    static let support = URL(string: "https://ko-fi.com/\(kofiAccount)")!
-    static let releases = URL(string: "https://github.com/\(owner)/claude-graft/releases")!
-    static let newIssue = URL(string: "https://github.com/\(owner)/claude-graft/issues/new")!
-
-    /// The developer, as a person rather than a repository. A third and fourth
-    /// spelling, for the same reason as the tip jar: neither is the GitHub name.
-    static let email = "aadityavmore@gmail.com"
-    static let linkedIn = URL(string: "https://www.linkedin.com/in/aadityavmore/")!
-
-    /// A message that already says which Graft and which macOS it comes from,
-    /// because the first reply to a problem report is otherwise always a
-    /// question asking for exactly that.
-    static func mail(version: String = Installer.graftVersion,
-                     system: String = ProcessInfo.processInfo.operatingSystemVersionString) -> URL {
-        var parts = URLComponents()
-        parts.scheme = "mailto"
-        parts.path = email
-        parts.queryItems = [
-            URLQueryItem(name: "subject", value: "Claude Graft \(version)"),
-            URLQueryItem(name: "body", value: "\n\n—\nClaude Graft \(version), macOS \(system)"),
-        ]
-        return parts.url!
-    }
+    static let owner = "moonlitnayeem"
+    static let source = URL(string: "https://github.com/\(owner)/claude-switcher")!
+    static let site = source
+    static let releases = source.appendingPathComponent("releases")
+    static let support = source.appendingPathComponent("issues")
+    static let newIssue = support.appendingPathComponent("new")
+    static let upstream = URL(string: "https://github.com/aaditya-v-more/claude-graft")!
 
     static func open(_ url: URL) {
         NSWorkspace.shared.open(url)
@@ -86,15 +53,12 @@ struct FooterLink: View {
 struct GraftHelpCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .help) {
-            Button(L10n.text("Claude Graft Help")) { Links.open(Links.site) }
-            Button(L10n.text("What’s New in Claude Graft")) { Links.open(Links.releases) }
-            Divider()
+            Button(L10n.text("Claude Switcher Help")) { Links.open(Links.site) }
+            Button(L10n.text("Download Updates…")) { Links.open(Links.releases) }
             Button(L10n.text("Report a Problem…")) { Links.open(Links.newIssue) }
-            Button(L10n.text("Email the Developer…")) { Links.open(Links.mail()) }
-            Button(L10n.text("Aaditya More on LinkedIn")) { Links.open(Links.linkedIn) }
             Divider()
             Button(L10n.text("View Source on GitHub")) { Links.open(Links.source) }
-            Button(L10n.text("Support Claude Graft…")) { Links.open(Links.support) }
+            Button(L10n.text("Original Claude Graft project")) { Links.open(Links.upstream) }
         }
     }
 }

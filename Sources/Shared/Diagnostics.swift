@@ -22,14 +22,14 @@ enum Diagnostics {
     /// Beside the state files it describes, so a copy of one is a copy of the
     /// other and a report is never read against somebody else's stores.
     static var file: URL {
-        Graft.applicationSupport.appending(path: "ClaudeGraft/diagnostics.log")
+        Graft.graftFolder.appending(path: "diagnostics.log")
     }
 
     /// The current shape of things, rewritten in full each pass. The log says
     /// what happened; this says what is true now, which is the question asked
     /// first every time and the one that took an hour of shell to answer.
     static var reportFile: URL {
-        Graft.applicationSupport.appending(path: "ClaudeGraft/state-report.txt")
+        Graft.graftFolder.appending(path: "state-report.txt")
     }
 
     /// Kept small enough to read and to paste. A pass writes a handful of
@@ -40,6 +40,10 @@ enum Diagnostics {
     /// over the same stores, and knowing which one filed a record is most of
     /// knowing why it filed it then.
     static var who: String = ProcessInfo.processInfo.processName
+
+    /// A relay can outlive its installation. Diagnostics must not recreate
+    /// data that an uninstall has removed from underneath that process.
+    static var createsDirectory = true
 
     private static let lock = NSLock()
 
@@ -66,12 +70,14 @@ enum Diagnostics {
         lock.lock()
         defer { lock.unlock() }
         rotateIfLarge()
-        try? Graft.fm.createDirectory(at: file.deletingLastPathComponent(),
-                                      withIntermediateDirectories: true)
+        if createsDirectory {
+            try? Graft.fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                          attributes: [.posixPermissions: 0o700])
+        }
         // O_APPEND rather than a handle held open, because the app and any
         // number of launchers write here at once and each of them is a
         // short-lived process that may be killed mid-pass.
-        let descriptor = open(file.path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+        let descriptor = open(file.path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
         guard descriptor >= 0 else { return }
         var payload = data
         payload.append(0x0a)
@@ -304,7 +310,7 @@ extension Graft {
         let findings = stateFindings(report, login: login)
         var lines: [String] = []
 
-        lines.append("Claude Graft — state of the chat stores")
+        lines.append("Claude Switcher — state of the chat stores")
         lines.append("read \(ISO8601DateFormatter().string(from: Date())) by \(Diagnostics.who)")
         lines.append("")
 

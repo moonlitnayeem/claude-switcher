@@ -60,11 +60,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             .sink { [weak self] _ in self?.updateTitle() }
             .store(in: &watches)
 
-        Shared.updater.$availableVersion.combineLatest(Shared.updater.$isHolding)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.updateTitle() }
-            .store(in: &watches)
-
         // The shortcuts too, so a new icon or name reaches the bar without
         // waiting for the next pass.
         Publishers.CombineLatest4(settings.$showFrontIcon, settings.$showFrontName,
@@ -111,7 +106,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         item.button?.imagePosition = .imageLeading
         item.button?.image = NSImage(systemSymbolName: StatusSymbol.idle,
-                                     accessibilityDescription: "Claude Graft")
+                                     accessibilityDescription: "Claude Switcher")
         // The only handle a script has on the item: its title is a figure
         // that changes on every pass, and the bar holds no other name for it.
         item.button?.setAccessibilityIdentifier("status-item")
@@ -142,17 +137,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func updateTitle() {
         guard let button = item?.button else { return }
         let updates = Shared.claudeUpdates
-        // Claude's own update outranks Graft's: it is the one that closes
-        // work, and the one with a confirmation waiting behind it.
-        let heldVersion = UpdatePolicy.showsInStatusItem(holding: Shared.updater.isHolding,
-                                                         available: Shared.updater.availableVersion)
-            ? Shared.updater.availableVersion : nil
         let alert = updates.isUpdating ? "arrow.triangle.2.circlepath"
             : updates.availableVersion != nil ? "exclamationmark.circle.fill"
-            : heldVersion != nil ? "arrow.down.circle.fill" : nil
+            : nil
         let updateTip = updates.isUpdating ? L10n.text("Claude Desktop is updating")
             : updates.availableVersion.map { L10n.format("Claude Desktop %@ is available", $0) }
-            ?? heldVersion.map { L10n.format("Claude Graft %@ is available", $0) }
         let wanted = settings.showFrontIcon || settings.showFrontName
         let named = usage.statusEntry(front: wanted ? Shared.frontmost.profile : nil)
             .flatMap { $0.named ? $0.entry : nil }
@@ -169,7 +158,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // mark would only take room from a bar that has little to spare. An
         // update keeps its symbol: that is news the front Claude cannot carry.
         let symbol = alert ?? (front == nil ? StatusSymbol.idle : nil)
-        button.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "Claude Graft") }
+        button.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "Claude Switcher") }
         let headline = front ?? usage.statusEntry(front: nil)?.entry
         let figures = headline?.currentUsage
         parts = front != nil || figures != nil ? (icon, tag, figures?.headline) : nil
@@ -406,7 +395,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // server keeps its own copy of a window's name apart from the one
         // VoiceOver reads, and a client that compared the two refused to act
         // on a window where they disagreed, so both are set.
-        let name = L10n.text("Claude Graft Menu")
+        let name = L10n.text("Claude Switcher Menu")
         window.title = name
         window.setAccessibilityTitle(name)
         // AppKit hangs a popover under the status item and leaves it out of

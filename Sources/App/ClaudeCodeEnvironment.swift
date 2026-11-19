@@ -4,6 +4,21 @@ import Foundation
 /// deciding what it should hold, and leaving both finished values in the
 /// journal for whichever opens that Claude next.
 enum ClaudeCodeEnvironment {
+    static let legacyGraftConflict = "Claude Graft"
+
+    /// Graft can be waiting for a profile to close before it installs its lines.
+    /// Read only the ownership flag, never the sealed environment in its journal.
+    static func legacyBorrowers() -> Set<String> {
+        struct LegacyJournal: Decodable {
+            struct Entry: Decodable { let wanted: Bool }
+            let profiles: [String: Entry]
+        }
+        let file = Graft.applicationSupport.appending(path: Graft.legacyFolderName + "/pool/environment.json")
+        guard let data = try? Data(contentsOf: file),
+              let journal = try? JSONDecoder().decode(LegacyJournal.self, from: data) else { return [] }
+        return Set(journal.profiles.compactMap { $0.value.wanted ? $0.key : nil })
+    }
+
     enum State: Equatable {
         case off
         case on
@@ -51,7 +66,8 @@ enum ClaudeCodeEnvironment {
     /// person's own appeared under the other name, and then nothing took it
     /// out: a proxy left without the certificate that makes it work, and a
     /// profile read as holding nothing while it still pointed at the relay.
-    static func read(_ profile: URL, wanted: Bool, key: Data) -> Reading? {
+    static func read(_ profile: URL, wanted: Bool, key: Data,
+                     legacyBorrowers: Set<String> = []) -> Reading? {
         guard let outer = PoolEnvironment.outer(in: profile) else { return nil }
         let current: String?
         switch outer[PoolEnvironment.field] {
@@ -69,7 +85,8 @@ enum ClaudeCodeEnvironment {
                 variables[name] = value
             }
         }
-        var conflict = conflict(in: variables)
+        var conflict = legacyBorrowers.contains(PoolEnvironment.key(for: profile))
+            ? legacyGraftConflict : conflict(in: variables)
         // Scoped values are laid over these when a session starts, so one
         // naming either variable would win over the lines without a word.
         if let scoped = outer[PoolEnvironment.scopedField] as? String {
@@ -113,6 +130,10 @@ enum ClaudeCodeEnvironment {
     /// Either name set to anything but the relay's value. Names are matched
     /// without regard to case, since a lower-case proxy variable is read too.
     static func conflict(in variables: [String: String]) -> String? {
+        let legacyCertificate = Graft.applicationSupport.appending(path: Graft.legacyFolderName + "/pool/relay-ca.pem")
+        if variables.contains(where: { name, value in
+            name.caseInsensitiveCompare(PoolEnvironment.certificateName) == .orderedSame && value == legacyCertificate.path
+        }) { return legacyGraftConflict }
         for (name, value) in variables {
             for (ours, wanted) in PoolEnvironment.lines
             where name.caseInsensitiveCompare(ours) == .orderedSame && value != wanted {
@@ -161,9 +182,11 @@ enum ClaudeCodeEnvironment {
             profiles[path] = (URL(fileURLWithPath: path), false)
         }
 
+        let legacy = legacyBorrowers()
         var readings: [String: Reading] = [:]
         for (path, profile) in profiles {
-            guard let reading = read(profile.url, wanted: profile.wants, key: key) else { continue }
+            guard let reading = read(profile.url, wanted: profile.wants, key: key, legacyBorrowers: legacy)
+            else { continue }
             readings[path] = reading
             journal.profiles[path] = reading.entry
         }
@@ -209,7 +232,12 @@ enum ClaudeCodeEnvironment {
 
         // A profile that wants nothing and holds nothing is finished with, and
         // a launcher has nothing left to do for it.
-        let finished = states.filter { $0.value == .off }.map(\.key)
+        let finished = states.compactMap { path, state -> String? in
+            switch state {
+            case .off, .conflict(_, holding: false): return path
+            default: return nil
+            }
+        }
         if !finished.isEmpty {
             var cleaned = PoolEnvironment.readJournal()
             for path in finished { cleaned.profiles[path] = nil }

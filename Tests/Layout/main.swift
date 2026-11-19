@@ -31,7 +31,7 @@ let layoutSession: URLSession = {
     return URLSession(configuration: configuration)
 }()
 let fm = FileManager.default
-let temporary = fm.temporaryDirectory.appending(path: "graft-layout-\(UUID().uuidString)")
+let temporary = fm.temporaryDirectory.appending(path: "switcher-layout-\(UUID().uuidString)")
 try fm.createDirectory(at: temporary, withIntermediateDirectories: true)
 defer { try? fm.removeItem(at: temporary) }
 Graft.applicationSupportOverride = temporary
@@ -40,8 +40,8 @@ Installer.registersWithLaunchServices = false
 Graft.runningClaudesOverride = { [] }
 Shared.usage.mayPromptUnasked = false
 // Claude 2 is created, borrows Claude's chats and draws on two accounts,
-// which is the fullest a shortcut's pane gets; Claude 3 is a draft. A bundle
-// carrying `graft.json` is all that makes a shortcut created.
+// which is the fullest a shortcut's pane gets; Claude 3 is a draft. The owned bundle
+// carries the fork identifier and its profile manifest.
 var shortcut = Shortcut(name: "Claude 2")
 shortcut.installedName = "Claude 2"
 let draft = Shortcut(name: "Claude 3", source: .own)
@@ -49,7 +49,10 @@ Shared.store.shortcuts = [shortcut, draft]
 let resources = Installer.installDirectoryOverride!.appending(path: "Claude 2.app/Contents/Resources")
 try fm.createDirectory(at: resources, withIntermediateDirectories: true)
 try JSONEncoder().encode(GraftConfig(profileDir: shortcut.profileDir.path, sourceDir: Graft.mainProfile.path))
-    .write(to: resources.appending(path: "graft.json"))
+    .write(to: resources.appending(path: "switcher.json"))
+let descriptor = ["CFBundleIdentifier": Installer.shortcutIDPrefix + shortcut.id.uuidString]
+try PropertyListSerialization.data(fromPropertyList: descriptor, format: .xml, options: 0)
+    .write(to: resources.deletingLastPathComponent().appending(path: "Info.plist"))
 // Claude's pane with accounts to draw on, one of them a Claude and one signed
 // in here, written before the pool first reads them. Attached rather than
 // started: nothing in here may run a relay or touch a Code environment.
@@ -83,12 +86,12 @@ func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.3)) }
 /// its description, or its title when it has none. The run loop keeps turning
 /// while the reader works, because every question it asks is answered here, on
 /// the main thread, and waiting on it would leave nobody to answer.
-func readFromOutside(_ window: NSWindow) -> [String: String] {
+func readFromOutside(_ window: NSWindow, toggleRoutingFixture: Bool = false) -> [String: String] {
     guard let reader = Bundle.main.url(forResource: "outside-reader", withExtension: nil) else { return [:] }
     let process = Process()
     let pipe = Pipe()
     process.executableURL = reader
-    process.arguments = [String(getpid()), window.title]
+    process.arguments = [String(getpid()), window.title] + (toggleRoutingFixture ? ["--toggle-routing-fixture"] : [])
     process.standardOutput = pipe
     guard (try? process.run()) != nil else { return [:] }
     let deadline = Date().addingTimeInterval(20)
@@ -311,6 +314,7 @@ struct Page {
     let profile: URL?
 }
 let pages = [
+    Page(name: "routing", selection: ContentView.routingID, profile: nil),
     Page(name: "claude", selection: ContentView.mainProfileID, profile: Graft.mainProfile),
     Page(name: "claude-2", selection: shortcut.id, profile: shortcut.profileDir),
     Page(name: "claude-3-draft", selection: draft.id, profile: draft.profileDir),
@@ -356,7 +360,8 @@ let pageProjects = sampleProjects(pageArtifacts)
 
 for appearance in [NSAppearance.Name.aqua, .darkAqua] {
 for page in pages {
-    let root = ContentView(selection: page.selection, artifacts: pageArtifacts, projects: pageProjects)
+    let root = ContentView(selection: page.selection, artifacts: pageArtifacts, projects: pageProjects,
+                           routingPreview: AnyView(DemoDashboard(empty: false)))
         .environmentObject(Shared.store)
         .environmentObject(Shared.settings)
         .environmentObject(Shared.usage)
@@ -373,7 +378,7 @@ for page in pages {
     window.setContentSize(NSSize(width: 820, height: 560))
     let hosting = controller.view
     window.appearance = NSAppearance(named: appearance)
-    window.title = "Claude Graft"
+    window.title = "Claude Switcher"
     if ProcessInfo.processInfo.environment["GRAFT_LAYOUT_VISIBLE"] == "1" {
         window.orderFront(nil)
     } else {
@@ -454,7 +459,26 @@ for page in pages {
                               "\(place): an account signed in here is named by its email")
                     }
                 }
-                if page.profile == nil {
+                if page.selection == ContentView.routingID {
+                    if state == "current" && appearance == .aqua {
+                        let id = "window.routing.automatic"
+                        let initial = element(id, in: tree)?.value
+                        _ = readFromOutside(window, toggleRoutingFixture: true)
+                        settle()
+                        let changed = seen(window).flatMap { element(id, in: $0) }?.value
+                        check(initial != nil && changed != nil && initial != changed,
+                              "\(place): pressing the switch changes the fixture's routing state")
+                        _ = readFromOutside(window, toggleRoutingFixture: true)
+                        settle()
+                        check(seen(window).flatMap { element(id, in: $0) }?.value == initial,
+                              "\(place): pressing again restores the fixture's routing state")
+                    }
+                    for control in ["sidebar.routing", "routing.automatic", "shared-usage.add", "routing.settings"] {
+                        check(element("window.\(control)", in: tree) != nil,
+                              "\(place): dashboard control \(control) is accessible")
+                    }
+                }
+                if page.profile == nil && page.selection != ContentView.routingID {
                     // One sign-in for all three: each page heads itself with
                     // the same accounts, each offering to sign in again or out.
                     let scope = page.selection == ContentView.projectsID ? "projects"
@@ -589,6 +613,12 @@ for page in pages {
                 let content = table.map { $0.numberOfRows == 0 ? 0 : $0.rect(ofRow: $0.numberOfRows - 1).maxY }
                     ?? document.frame.height
                 let overflow = content - room(in: scroll)
+                // The dashboard lists every account and its activity; the scroll view is intentional.
+                if page.selection == ContentView.routingID {
+                    check(scroll.bounds.width >= 200 && scroll.bounds.height >= 200,
+                          "\(place): the account and activity list has room to scroll")
+                    continue
+                }
                 check(overflow <= 1, "\(place): fits without scrolling (\(Int(overflow)) points over)")
                 // A page over on one macOS and not another is found by which
                 // row grew, and the machine that sees it may be one nobody can
@@ -628,7 +658,7 @@ let dropdown = hosted(MenuBarContent(openMainWindow: {})
     .environmentObject(Shared.usage), title: "Dropdown check")
 let dropdownTree = checkAccessibility(dropdown, surface: ControlSurface.dropdown, "the dropdown")
 for control in ["open-at-login", "show-in-menu-bar", "front-icon", "front-name", "manual-updates",
-                "hold-updates", "refresh-usage", "check-graft-updates", "open-window", "support", "quit",
+                "refresh-usage", "check-graft-updates", "open-window", "support", "quit",
                 "claude-update.check"] {
     check(element("dropdown.\(control)", in: dropdownTree) != nil, "the dropdown's \(control) can be asked for by name")
 }
@@ -758,7 +788,7 @@ if let directory = ProcessInfo.processInfo.environment["GRAFT_LAYOUT_WINDOWS"] {
     capture(settingsWindow, as: "\(Bundle.main.preferredLocalizations.first ?? "en")-settings", in: directory)
 }
 let settingsTree = checkAccessibility(settingsWindow, surface: ControlSurface.settings, "Settings")
-check(["open-at-login", "show-in-menu-bar", "front-icon", "front-name", "manual-updates", "hold-updates"]
+check(["open-at-login", "show-in-menu-bar", "front-icon", "front-name", "manual-updates", "download-updates"]
         .allSatisfy { element("settings.\($0)", in: settingsTree) != nil },
       "every switch in Settings can be asked for by name, apart from the dropdown's copy of it")
 settingsWindow.orderOut(nil)

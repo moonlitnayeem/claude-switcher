@@ -11,8 +11,10 @@ struct ContentView: View {
     static let projectsID = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let searchID = UUID(uuidString: "00000000-0000-0000-0000-000000000004")!
 
+    static let routingID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
+
     @EnvironmentObject private var store: ShortcutStore
-    @State private var selection: UUID? = ContentView.mainProfileID
+    @State private var selection: UUID? = ContentView.routingID
     @State private var pendingDeletion: UUID?
     @State private var problem: String?
     @State private var columns = NavigationSplitViewVisibility.all
@@ -22,11 +24,14 @@ struct ContentView: View {
     private let artifacts: ArtifactCenter?
     private let projects: ProjectCenter?
 
-    init(selection: UUID? = ContentView.mainProfileID, artifacts: ArtifactCenter? = nil,
-         projects: ProjectCenter? = nil) {
+    private let routingPreview: AnyView?
+
+    init(selection: UUID? = ContentView.routingID, artifacts: ArtifactCenter? = nil,
+         projects: ProjectCenter? = nil, routingPreview: AnyView? = nil) {
         _selection = State(initialValue: selection)
         self.artifacts = artifacts
         self.projects = projects
+        self.routingPreview = routingPreview
     }
 
     var body: some View {
@@ -38,6 +43,7 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
                 .listStyle(.sidebar)
+                .safeAreaInset(edge: .top, spacing: 0) { SwitcherBrand() }
                 .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
                 .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
         } detail: {
@@ -81,7 +87,14 @@ struct ContentView: View {
 
     @ViewBuilder
     private var profileDetail: some View {
-        if selection == Self.mainProfileID {
+        if selection == Self.routingID {
+            if let routingPreview { routingPreview }
+            else {
+                RoutingDashboard { key in
+                    selection = key == UsagePoolController.mainKey ? Self.mainProfileID : UUID(uuidString: key)
+                }
+            }
+        } else if selection == Self.mainProfileID {
             MainProfileDetail()
         } else if selection == Self.artifactsID {
             ArtifactsView(center: artifacts ?? Shared.artifacts)
@@ -135,69 +148,30 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List(selection: $selection) {
-            Section("Claude") {
-                Label {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Claude")
-                        Text("Installed normally")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "house")
-                        .foregroundStyle(.secondary)
-                }
-                .spoken("Claude", value: L10n.text("Installed normally"))
-                .identified("sidebar.\(Graft.mainProfile.lastPathComponent)")
-                .tag(Self.mainProfileID)
-
-                Label {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Artifacts")
-                        Text("Every account")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "square.on.square")
-                        .foregroundStyle(.secondary)
-                }
-                .spoken(L10n.text("Artifacts"), value: L10n.text("Every account"))
-                .identified("sidebar.artifacts")
-                .tag(Self.artifactsID)
-
-                Label {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Projects")
-                        Text("Every account")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "folder")
-                        .foregroundStyle(.secondary)
-                }
-                .spoken(L10n.text("Projects"), value: L10n.text("Every account"))
-                .identified("sidebar.projects")
-                .tag(Self.projectsID)
-
-                Label {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Search Chats")
-                        Text("Every account")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                }
-                .spoken(L10n.text("Search Chats"), value: L10n.text("Every account"))
-                .identified("sidebar.search")
-                .tag(Self.searchID)
+            Section {
+                Label("Routing", systemImage: "arrow.triangle.branch")
+                    .identified("sidebar.routing")
+                    .tag(Self.routingID)
             }
 
-            Section("Shortcuts") {
+            Section("Library") {
+                Label("Artifacts", systemImage: "square.on.square")
+                    .identified("sidebar.artifacts")
+                    .tag(Self.artifactsID)
+                Label("Projects", systemImage: "folder")
+                    .identified("sidebar.projects")
+                    .tag(Self.projectsID)
+                Label("Search Chats", systemImage: "magnifyingglass")
+                    .identified("sidebar.search")
+                    .tag(Self.searchID)
+            }
+
+            Section("Profiles") {
+                Label("Claude", systemImage: "house")
+                    .spoken("Claude", value: L10n.text("Installed normally"))
+                    .identified("sidebar.\(Graft.mainProfile.lastPathComponent)")
+                    .tag(Self.mainProfileID)
+
                 ForEach(store.shortcuts) { shortcut in
                     Label {
                         VStack(alignment: .leading, spacing: 1) {
@@ -247,8 +221,8 @@ struct ContentView: View {
             ClaudeUpdateStatus(stacked: true)
             Divider()
             HStack(spacing: 0) {
-                FooterLink("Support", icon: "heart", url: Links.support,
-                           help: "Claude Graft is free. A tip on Ko-fi is what keeps it worked on.")
+                FooterLink("Help", icon: "questionmark.circle", url: Links.support,
+                           help: "Get help with Claude Switcher")
                     .identified("support")
                 Spacer(minLength: 8)
                 FooterLink("Source", icon: "chevron.left.forwardslash.chevron.right", url: Links.source,

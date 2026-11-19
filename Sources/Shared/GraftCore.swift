@@ -70,13 +70,20 @@ enum Graft {
         if isNamed(trimmed, "Claude") {
             return L10n.text("That is Claude's own profile folder. Pick another name.")
         }
-        if isNamed(trimmed, graftFolderName) {
-            return L10n.text("That folder belongs to Claude Graft itself. Pick another name.")
+        if reservedSupportFolder(applicationSupport.appending(path: trimmed)) {
+            return L10n.text("That folder stores application settings. Pick another name.")
         }
         return nil
     }
 
-    static let graftFolderName = "ClaudeGraft"
+    static let graftFolderName = "ClaudeSwitcher"
+    static let legacyFolderName = "ClaudeGraft"
+
+    private static func reservedSupportFolder(_ url: URL) -> Bool {
+        [graftFolderName, legacyFolderName].contains { name in
+            isNamed(url.lastPathComponent, name) || samePath(url, applicationSupport.appending(path: name))
+        }
+    }
 
     /// Where Graft keeps its own state, beside the profiles.
     static var graftFolder: URL { applicationSupport.appending(path: graftFolderName) }
@@ -129,7 +136,7 @@ enum Graft {
     }
 
     /// Suffix for anything a profile owned before it was grafted.
-    static let stashSuffix = ".graft-own"
+    static let stashSuffix = ".switcher-own"
 
     /// Hidden sibling, so the app never mistakes a stashed organization folder
     /// for a real one when it scans the store.
@@ -831,7 +838,7 @@ enum Graft {
     private static let transcriptCacheLock = NSLock()
 
     static var transcriptCacheFile: URL {
-        applicationSupport.appending(path: "ClaudeGraft/transcript-cache.json")
+        graftFolder.appending(path: "transcript-cache.json")
     }
 
     private static func loadTranscriptCache() {
@@ -886,7 +893,7 @@ enum Graft {
     }
 
     static var shortcutsFile: URL {
-        applicationSupport.appending(path: "ClaudeGraft/shortcuts.json")
+        graftFolder.appending(path: "shortcuts.json")
     }
 
     /// The folder of every shortcut this app has made, read out of the list
@@ -1199,7 +1206,7 @@ enum Graft {
     }
 
     static var sessionRecordStateFile: URL {
-        applicationSupport.appending(path: "ClaudeGraft/session-records.json")
+        graftFolder.appending(path: "session-records.json")
     }
 
     static func loadSessionRecordState() -> SessionRecordState {
@@ -1892,7 +1899,7 @@ enum Graft {
     }
 
     static var mirrorStateFile: URL {
-        applicationSupport.appending(path: "ClaudeGraft/mirrored-chats.json")
+        graftFolder.appending(path: "mirrored-chats.json")
     }
 
     static func loadMirrorState() -> MirrorState {
@@ -1946,7 +1953,7 @@ enum Graft {
     private static var stateLockDepth = 0
     private static var stateLockDescriptor: Int32 = -1
 
-    static var stateLockFile: URL { applicationSupport.appending(path: "ClaudeGraft/state.lock") }
+    static var stateLockFile: URL { graftFolder.appending(path: "state.lock") }
 
     static func enterStateLock() {
         stateLockLocal.lock()
@@ -2821,7 +2828,7 @@ enum Graft {
 
         // Renaming a complete sibling over the link replaces the link itself;
         // a direct write through it would change the source's permissions.
-        let staged = profile.appending(path: ".graft-settings-\(UUID().uuidString).tmp")
+        let staged = profile.appending(path: ".switcher-settings-\(UUID().uuidString).tmp")
         defer { try? fm.removeItem(at: staged) }
         do {
             let data = try JSONSerialization.data(withJSONObject: own,
@@ -3298,7 +3305,7 @@ enum Graft {
             case .mainProfile:
                 return L10n.text("That folder belongs to Claude itself and will not be deleted.")
             case .graftFolder:
-                return L10n.text("That folder belongs to Claude Graft itself and will not be deleted.")
+                return L10n.text("That folder stores application settings and cannot be deleted.")
             case .outsideApplicationSupport:
                 return L10n.text("Only folders directly inside ~/Library/Application Support can be deleted.")
             case .running:
@@ -3319,7 +3326,7 @@ enum Graft {
         // does not resolve to the spelling on disk compares as another place.
         guard !samePath(profile, mainProfile), !isNamed(profile.lastPathComponent, "Claude")
         else { throw ProfileError.mainProfile }
-        guard !samePath(profile, graftFolder), !isNamed(profile.lastPathComponent, graftFolderName)
+        guard !reservedSupportFolder(profile)
         else { throw ProfileError.graftFolder }
         guard !isRunning(profile: profile) else { throw ProfileError.running }
         guard isDirectory(profile) else { return }
