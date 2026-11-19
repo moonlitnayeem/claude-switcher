@@ -1,6 +1,6 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Claude Switcher downloads and release notes
+  - name: AI Switcher downloads and release notes
     url: https://github.com/moonlitnayeem/claude-switcher/releases
     about: Find the macOS app, disk image, checksums and signing details.
   - name: Security reporting

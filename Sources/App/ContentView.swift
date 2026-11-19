@@ -13,6 +13,8 @@ struct ContentView: View {
 
     static let routingID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
 
+    static let openAIID = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
+
     @EnvironmentObject private var store: ShortcutStore
     @State private var selection: UUID? = ContentView.routingID
     @State private var pendingDeletion: UUID?
@@ -25,13 +27,15 @@ struct ContentView: View {
     private let projects: ProjectCenter?
 
     private let routingPreview: AnyView?
+    private let brandIcon: NSImage?
 
     init(selection: UUID? = ContentView.routingID, artifacts: ArtifactCenter? = nil,
-         projects: ProjectCenter? = nil, routingPreview: AnyView? = nil) {
+         projects: ProjectCenter? = nil, routingPreview: AnyView? = nil, brandIcon: NSImage? = nil) {
         _selection = State(initialValue: selection)
         self.artifacts = artifacts
         self.projects = projects
         self.routingPreview = routingPreview
+        self.brandIcon = brandIcon
     }
 
     var body: some View {
@@ -43,25 +47,27 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
                 .listStyle(.sidebar)
-                .safeAreaInset(edge: .top, spacing: 0) { SwitcherBrand() }
+                .safeAreaInset(edge: .top, spacing: 0) { SwitcherBrand(icon: brandIcon) }
                 .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
                 .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
         } detail: {
             VStack(spacing: 0) {
-                UpdateRecoveryNotice()
+                if !GraftConnection.isEnabled { UpdateRecoveryNotice() }
                 profileDetail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: add) {
-                    Label("New Shortcut", systemImage: "plus")
+            if !GraftConnection.isEnabled {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: add) {
+                        Label("New Shortcut", systemImage: "plus")
+                    }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .help("New shortcut")
+                    .identified("new-shortcut")
                 }
-                .keyboardShortcut("n", modifiers: .command)
-                .help("New shortcut")
-                .identified("new-shortcut")
             }
         }
         .confirmationDialog(deletionTitle,
@@ -89,11 +95,14 @@ struct ContentView: View {
     private var profileDetail: some View {
         if selection == Self.routingID {
             if let routingPreview { routingPreview }
+            else if GraftConnection.isEnabled { GraftConnectionView() }
             else {
                 RoutingDashboard { key in
                     selection = key == UsagePoolController.mainKey ? Self.mainProfileID : UUID(uuidString: key)
                 }
             }
+        } else if selection == Self.openAIID {
+            OpenAIAccountsView()
         } else if selection == Self.mainProfileID {
             MainProfileDetail()
         } else if selection == Self.artifactsID {
@@ -148,65 +157,74 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List(selection: $selection) {
-            Section {
-                Label("Routing", systemImage: "arrow.triangle.branch")
+            Section("Switch accounts") {
+                Label("Claude Code", systemImage: "point.3.connected.trianglepath.dotted")
                     .identified("sidebar.routing")
                     .tag(Self.routingID)
+                Label("ChatGPT & Codex", systemImage: "bubble.left.and.text.bubble.right")
+                    .identified("sidebar.openai")
+                    .tag(Self.openAIID)
             }
 
-            Section("Library") {
-                Label("Artifacts", systemImage: "square.on.square")
-                    .identified("sidebar.artifacts")
-                    .tag(Self.artifactsID)
-                Label("Projects", systemImage: "folder")
-                    .identified("sidebar.projects")
-                    .tag(Self.projectsID)
-                Label("Search Chats", systemImage: "magnifyingglass")
-                    .identified("sidebar.search")
-                    .tag(Self.searchID)
+            if !GraftConnection.isEnabled {
+                claudeSidebarItems
             }
+        }
+        .onDeleteCommand { if !GraftConnection.isEnabled, let selection { requestDeletion(of: selection) } }
+    }
 
-            Section("Profiles") {
-                Label("Claude", systemImage: "house")
-                    .spoken("Claude", value: L10n.text("Installed normally"))
-                    .identified("sidebar.\(Graft.mainProfile.lastPathComponent)")
-                    .tag(Self.mainProfileID)
+    @ViewBuilder private var claudeSidebarItems: some View {
+        Section("Claude library") {
+            Label("Artifacts", systemImage: "square.on.square")
+                .identified("sidebar.artifacts")
+                .tag(Self.artifactsID)
+            Label("Projects", systemImage: "folder")
+                .identified("sidebar.projects")
+                .tag(Self.projectsID)
+            Label("Search Chats", systemImage: "magnifyingglass")
+                .identified("sidebar.search")
+                .tag(Self.searchID)
+        }
 
-                ForEach(store.shortcuts) { shortcut in
-                    Label {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(shortcut.name)
-                            Text(shortcut.installedName == nil
-                                 ? L10n.text("Not created yet")
-                                 : store.label(for: shortcut.source))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } icon: {
-                        Image(systemName: shortcut.source == .own ? "circle" : "link")
+        Section("Claude profiles") {
+            Label("Claude", systemImage: "house")
+                .spoken("Claude", value: L10n.text("Installed normally"))
+                .identified("sidebar.\(Graft.mainProfile.lastPathComponent)")
+                .tag(Self.mainProfileID)
+
+            ForEach(store.shortcuts) { shortcut in
+                Label {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(shortcut.name)
+                        Text(shortcut.installedName == nil
+                             ? L10n.text("Not created yet")
+                             : store.label(for: shortcut.source))
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .spoken(shortcut.name, value: sidebarValue(for: shortcut))
-                    .identified("sidebar.\(shortcut.profileDir.lastPathComponent)")
-                    .tag(shortcut.id)
-                    .contextMenu {
-                        Button(L10n.text(store.isDraft(shortcut) ? "Discard" : "Delete Shortcut…"),
-                               role: .destructive) {
-                            requestDeletion(of: shortcut.id)
-                        }
+                } icon: {
+                    Image(systemName: shortcut.source == .own ? "circle" : "link")
+                        .foregroundStyle(.secondary)
+                }
+                .spoken(shortcut.name, value: sidebarValue(for: shortcut))
+                .identified("sidebar.\(shortcut.profileDir.lastPathComponent)")
+                .tag(shortcut.id)
+                .contextMenu {
+                    Button(L10n.text(store.isDraft(shortcut) ? "Discard" : "Delete Shortcut…"),
+                           role: .destructive) {
+                        requestDeletion(of: shortcut.id)
                     }
                 }
             }
-
-            Button(action: add) {
-                Label("New Shortcut", systemImage: "plus")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .identified("sidebar.new-shortcut")
-            .padding(.vertical, 2)
         }
-        .onDeleteCommand { if let selection { requestDeletion(of: selection) } }
+
+        Button(action: add) {
+            Label("New Shortcut", systemImage: "plus")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .identified("sidebar.new-shortcut")
+        .padding(.vertical, 2)
     }
 
     /// The foot of the sidebar. There is no About panel and no preferences
@@ -218,11 +236,13 @@ struct ContentView: View {
             Divider()
             // Here rather than across the top of the window, where one line
             // about Claude's version took the full width above every profile.
-            ClaudeUpdateStatus(stacked: true)
-            Divider()
+            if !GraftConnection.isEnabled {
+                ClaudeUpdateStatus(stacked: true)
+                Divider()
+            }
             HStack(spacing: 0) {
                 FooterLink("Help", icon: "questionmark.circle", url: Links.support,
-                           help: "Get help with Claude Switcher")
+                           help: "Get help with AI Switcher")
                     .identified("support")
                 Spacer(minLength: 8)
                 FooterLink("Source", icon: "chevron.left.forwardslash.chevron.right", url: Links.source,

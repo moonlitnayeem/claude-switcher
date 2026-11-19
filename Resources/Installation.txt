@@ -1,10 +1,19 @@
-Claude Switcher for macOS
+AI Switcher for macOS
 
-Drag Claude Switcher into the Applications folder, then open it from Applications.
-You can eject this disk image once the copy is complete.
+Drag AI Switcher into Applications, then open it from there.
+You can eject the disk image after the copy finishes.
 
-Claude Switcher works with the Claude Desktop app already installed on your Mac.
-Account switching requires macOS 15 or later.
+Already using Graft?
+Keep Graft running. In AI Switcher’s Settings, turn on “Use my existing Graft
+setup”, then quit and reopen AI Switcher. Choose Claude Code to see your
+accounts and the last reply. Claude can keep using its saved connection.
 
-Source, updates and help:
+New to AI Switcher?
+Choose Claude Code to add a backup, or ChatGPT & Codex to open a new window
+with the account you pick.
+
+AI Switcher runs on macOS 13 or later. Automatic Claude Code switching
+requires Claude Desktop and macOS 15 or later.
+
+Source, updates and help
 https://github.com/moonlitnayeem/claude-switcher

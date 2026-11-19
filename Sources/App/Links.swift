@@ -53,7 +53,7 @@ struct FooterLink: View {
 struct GraftHelpCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .help) {
-            Button(L10n.text("Claude Switcher Help")) { Links.open(Links.site) }
+            Button(L10n.text("AI Switcher Help")) { Links.open(Links.site) }
             Button(L10n.text("Download Updates…")) { Links.open(Links.releases) }
             Button(L10n.text("Report a Problem…")) { Links.open(Links.newIssue) }
             Divider()

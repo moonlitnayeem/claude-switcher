@@ -26,7 +26,7 @@ struct MenuBarContent: View {
                     .padding(6)
                     .background(Color.teal.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
                     .accessibilityHidden(true)
-                Text("Claude Switcher")
+                Text("AI Switcher")
                     .font(.headline)
                 Spacer()
             }
@@ -123,9 +123,9 @@ struct MenuBarContent: View {
                     usage.refresh(store, interactive: true)
                 }
                 MenuButton("Download Updates…", id: "check-graft-updates") { Links.open(Links.releases) }
-                MenuButton("Open Claude Switcher", id: "open-window", action: openMainWindow)
+                MenuButton("Open AI Switcher", id: "open-window", action: openMainWindow)
                 MenuButton("Help and Support…", id: "support") { Links.open(Links.support) }
-                MenuButton("Quit Claude Switcher", id: "quit") { AppDelegate.quit() }
+                MenuButton("Quit AI Switcher", id: "quit") { AppDelegate.quit() }
             }
             .padding(.horizontal, 8)
             .padding(.bottom, 8)

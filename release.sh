@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 BUILD="${SWITCHER_BUILD_DIR:-$ROOT/build.noindex}"
 DIST="${SWITCHER_DIST_DIR:-$ROOT/dist}"
-BASE="ClaudeSwitcher-$VERSION-macOS"
+BASE="AISwitcher-$VERSION-macOS"
 WORK="$(mktemp -d)"
 MOUNT="$WORK/verify"
 attached=false
@@ -54,7 +54,7 @@ submit() {
 }
 
 SWITCHER_UNIVERSAL=1 SWITCHER_SIGN_IDENTITY="$identity" SWITCHER_BUILD_DIR="$WORK/build" "$ROOT/build.sh"
-APP="$WORK/build/Claude Switcher.app"
+APP="$WORK/build/AI Switcher.app"
 if $notarize; then
     ditto -c -k --keepParent "$APP" "$WORK/submit.zip"
     submit "$WORK/submit.zip"
@@ -63,11 +63,11 @@ if $notarize; then
 fi
 mkdir -p "$WORK/image" "$MOUNT" "$BUILD" "$DIST"
 # Preserve the notarization ticket when copying the app. Everything originated in a clean temp directory.
-ditto "$APP" "$WORK/image/Claude Switcher.app"
+ditto "$APP" "$WORK/image/AI Switcher.app"
 ln -s /Applications "$WORK/image/Applications"
 cp "$ROOT/Resources/InstallerLayout.dsstore" "$WORK/image/.DS_Store"
 cp "$ROOT/Resources/Installation.txt" "$WORK/image/Installation.txt"
-hdiutil create -quiet -format UDZO -fs HFS+ -volname "Claude Switcher" \
+hdiutil create -quiet -format UDZO -fs HFS+ -volname "AI Switcher" \
     -srcfolder "$WORK/image" "$WORK/$BASE.dmg"
 sign_flags=(--sign "$identity" --identifier com.moonlitnayeem.claude-switcher.installer)
 if [[ "$identity" != "-" ]]; then sign_flags+=(--timestamp); fi
@@ -81,13 +81,13 @@ hdiutil verify -quiet "$WORK/$BASE.dmg"
 codesign --verify --strict "$WORK/$BASE.dmg"
 hdiutil attach -quiet -readonly -nobrowse -noautoopen -mountpoint "$MOUNT" "$WORK/$BASE.dmg"
 attached=true
-mounted="$MOUNT/Claude Switcher.app"
+mounted="$MOUNT/AI Switcher.app"
 codesign --verify --deep --strict "$mounted"
 if $notarize; then
     xcrun stapler validate "$mounted"
     spctl --assess --type execute "$mounted"
 fi
-for part in MacOS/ClaudeSwitcher Resources/graft-launch Resources/graft-relay; do
+for part in MacOS/AISwitcher Resources/graft-launch Resources/graft-relay; do
     lipo "$mounted/Contents/$part" -verify_arch arm64 x86_64
     codesign --verify --strict "$mounted/Contents/$part"
 done
@@ -97,15 +97,15 @@ cmp "$ROOT/LICENSE" "$mounted/Contents/Resources/LICENSE"
 hdiutil detach -quiet "$MOUNT"
 attached=false
 # Publish local results only after the mounted image passes all checks.
-rm -rf "$BUILD/Claude Switcher.app"
-ditto "$APP" "$BUILD/Claude Switcher.app"
+rm -rf "$BUILD/AI Switcher.app"
+ditto "$APP" "$BUILD/AI Switcher.app"
 ditto -c -k --keepParent "$APP" "$WORK/$BASE.zip"
 mkdir -p "$WORK/unzipped"
 ditto -x -k "$WORK/$BASE.zip" "$WORK/unzipped"
-codesign --verify --deep --strict "$WORK/unzipped/Claude Switcher.app"
-if $notarize; then xcrun stapler validate "$WORK/unzipped/Claude Switcher.app"; fi
+codesign --verify --deep --strict "$WORK/unzipped/AI Switcher.app"
+if $notarize; then xcrun stapler validate "$WORK/unzipped/AI Switcher.app"; fi
 mv -f "$WORK/$BASE.dmg" "$DIST/$BASE.dmg"
 mv -f "$WORK/$BASE.zip" "$DIST/$BASE.zip"
 (cd "$DIST" && shasum -a 256 "$BASE.dmg" "$BASE.zip" > "$BASE.sha256")
 echo "Verified $DIST/$BASE.dmg"
-echo "App: $BUILD/Claude Switcher.app"
+echo "App: $BUILD/AI Switcher.app"

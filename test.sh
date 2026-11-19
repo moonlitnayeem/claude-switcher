@@ -11,6 +11,7 @@ mkdir -p "$BUILD"
 swiftc -swift-version 5 \
     -target "$(uname -m)-apple-macos${MACOS_DEPLOYMENT_TARGET:-13.0}" \
     "$ROOT/Sources/Shared/GraftCore.swift" \
+    "$ROOT/Sources/Shared/GraftAccountLabels.swift" \
     "$ROOT/Sources/Shared/SidebarSync.swift" \
     "$ROOT/Sources/Shared/SidebarStorage.swift" \
     "$ROOT/Sources/Shared/Diagnostics.swift" \
@@ -32,6 +33,7 @@ swiftc -swift-version 5 \
     "$ROOT/Sources/App/ClaudeUpdateFlow.swift" \
     "$ROOT/Sources/App/ClaudeDesktopUpdater.swift" \
     "$ROOT/Sources/App/FrontClaude.swift" \
+    "$ROOT/Sources/App/GraftConnection.swift" \
     "$ROOT/Sources/App/UsagePoolController.swift" \
     "$ROOT/Sources/App/ClaudeCodeEnvironment.swift" \
     "$ROOT/Sources/App/AccountSignIn.swift" \

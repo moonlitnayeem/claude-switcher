@@ -35,7 +35,7 @@ enum Installer {
     }
 
     /// Names that belong to Claude itself and must never be written over.
-    static let reservedNames = ["Claude", "Claude Graft", "Claude Switcher"]
+    static let reservedNames = ["Claude", "Claude Graft", "Claude Switcher", "AI Switcher"]
     static let shortcutIDPrefix = "com.moonlitnayeem.claude-switcher.shortcut."
 
     /// True only for a bundle this app built. Every destructive step checks it,
@@ -144,11 +144,11 @@ enum Installer {
         var errorDescription: String? {
             switch self {
             case .missingLauncher:
-                return L10n.text("This copy of Claude Switcher is missing its launcher binary.")
+                return L10n.text("This copy of AI Switcher is missing its launcher binary.")
             case .reservedName(let name):
                 return L10n.format("“%@” is the name of Claude itself. Pick something else.", name)
             case .nameTaken(let path):
-                return L10n.format("There is already an application at %@ that Claude Switcher did not create. Rename this shortcut.", path)
+                return L10n.format("There is already an application at %@ that AI Switcher did not create. Rename this shortcut.", path)
             case .badFolder(let reason):
                 return reason
             case .selfSource:

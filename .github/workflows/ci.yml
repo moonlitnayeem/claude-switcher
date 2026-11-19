@@ -14,14 +14,18 @@ jobs:
         run: ./test.sh
       - name: Relay integration tests
         run: ./test-relay.sh
+      - name: Existing Graft connection and reset checks
+        run: ./test-graft-connection.sh
+      - name: ChatGPT and Codex profile checks
+        run: ./test-openai.sh
       - name: English and Russian window layout
         run: ./test-layout.sh
       - name: Build for Apple silicon and Intel
         run: SWITCHER_UNIVERSAL=1 ./build.sh
       - name: Verify universal binaries and bundle signature
         run: |
-          app='build.noindex/Claude Switcher.app'
-          for binary in MacOS/ClaudeSwitcher Resources/graft-launch Resources/graft-relay; do
+          app='build.noindex/AI Switcher.app'
+          for binary in MacOS/AISwitcher Resources/graft-launch Resources/graft-relay; do
             lipo "$app/Contents/$binary" -verify_arch arm64 x86_64
           done
           codesign --verify --deep --strict "$app"

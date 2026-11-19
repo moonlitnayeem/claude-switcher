@@ -8,7 +8,7 @@ DEPLOYMENT="${MACOS_DEPLOYMENT_TARGET:-13.0}"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-APP="$WORK/Claude Switcher.app"
+APP="$WORK/AI Switcher.app"
 CONTENTS="$APP/Contents"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources" "$BUILD"
 archs=("$(uname -m)")
@@ -41,10 +41,10 @@ compile() {
 }
 
 shared=("$ROOT"/Sources/Shared/*.swift)
-echo "Compiling Claude Switcher and its helpers for ${archs[*]}"
+echo "Compiling AI Switcher and its helpers for ${archs[*]}"
 compile "$CONTENTS/Resources/graft-launch" "${shared[@]}" "$ROOT/Sources/Launcher/main.swift"
 compile "$CONTENTS/Resources/graft-relay" "${shared[@]}" "$ROOT"/Sources/Relay/*.swift
-compile "$CONTENTS/MacOS/ClaudeSwitcher" "${shared[@]}" "$ROOT"/Sources/App/*.swift
+compile "$CONTENTS/MacOS/AISwitcher" "${shared[@]}" "$ROOT"/Sources/App/*.swift
 
 cp "$ROOT/Resources/Info.plist" "$CONTENTS/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" \
@@ -60,7 +60,7 @@ done
 codesign "${sign_flags[@]}" "$APP"
 codesign --verify --deep --strict "$APP"
 # Only replace this product's bundle, leaving other builds and test results intact.
-rm -rf "$BUILD/Claude Switcher.app"
-ditto --noextattr --norsrc "$APP" "$BUILD/Claude Switcher.app"
-codesign --verify --deep --strict "$BUILD/Claude Switcher.app"
-echo "Built $BUILD/Claude Switcher.app ($VERSION)"
+rm -rf "$BUILD/AI Switcher.app"
+ditto --noextattr --norsrc "$APP" "$BUILD/AI Switcher.app"
+codesign --verify --deep --strict "$BUILD/AI Switcher.app"
+echo "Built $BUILD/AI Switcher.app ($VERSION)"

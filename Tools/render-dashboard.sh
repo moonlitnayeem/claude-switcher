@@ -15,4 +15,4 @@ done
 swiftc -whole-module-optimization -swift-version 5 -target "$(uname -m)-apple-macos${MACOS_DEPLOYMENT_TARGET:-13.0}" \
     "$ROOT"/Sources/Shared/*.swift "${sources[@]}" "$BUILD/ClaudeGraftApp.swift" \
     "$ROOT/Tests/Dashboard/"*.swift -o "$BUILD/DashboardFixture"
-"$BUILD/DashboardFixture" "$OUTPUT"
+"$BUILD/DashboardFixture" "$OUTPUT" "$ROOT/Resources/AppIcon.icns"

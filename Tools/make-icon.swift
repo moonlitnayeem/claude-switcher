@@ -39,6 +39,11 @@ func colour(_ hex: UInt32, _ alpha: CGFloat = 1) -> CGColor {
             alpha: alpha)
 }
 
+let artURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Artwork/AI-Switcher.png")
+guard let pixels = try? Data(contentsOf: artURL), let artwork = NSBitmapImageRep(data: pixels)?.cgImage else {
+    fatalError("Missing AI Switcher icon artwork")
+}
+
 func draw(size: Int) -> Data? {
     let side = CGFloat(size)
     guard let bitmap = NSBitmapImageRep(
@@ -53,36 +58,17 @@ func draw(size: Int) -> Data? {
     let body = CGRect(x: 100, y: 100, width: 824, height: 824)
     let shape = squircle(in: body)
     context.saveGState()
-    context.setShadow(offset: CGSize(width: 0, height: -11), blur: 20, color: colour(0x092C27, 0.33))
+    context.setShadow(offset: CGSize(width: 0, height: -11), blur: 20, color: colour(0x10142C, 0.33))
     context.addPath(shape)
-    context.setFillColor(colour(0x0B3934))
+    context.setFillColor(colour(0x0C1633))
     context.fillPath()
     context.restoreGState()
     context.saveGState()
     context.addPath(shape)
     context.clip()
 
-    let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                              colors: [colour(0x306D65), colour(0x174842), colour(0x082B29)] as CFArray,
-                              locations: [0, 0.47, 1])!
-    context.drawLinearGradient(gradient, start: CGPoint(x: 125, y: 920),
-                               end: CGPoint(x: 903, y: 120), options: [])
-    // Opposed slider positions echo the two accounts. Their silhouettes stay distinct at 16 px.
-    func track(y: CGFloat, fill: CGColor, thumbOnRight: Bool, thumb: CGColor) {
-        let rect = CGRect(x: 260, y: y, width: 504, height: 158)
-        context.saveGState()
-        context.setShadow(offset: CGSize(width: 0, height: -4), blur: 8, color: colour(0x001C19, 0.25))
-        context.addPath(CGPath(roundedRect: rect, cornerWidth: 79, cornerHeight: 79, transform: nil))
-        context.setFillColor(fill)
-        context.fillPath()
-        context.restoreGState()
-        let center = thumbOnRight ? rect.maxX - 79 : rect.minX + 79
-        let circle = CGRect(x: center - 51, y: rect.midY - 51, width: 102, height: 102)
-        context.setFillColor(thumb)
-        context.fillEllipse(in: circle)
-    }
-    track(y: 542, fill: colour(0xAAF1CE), thumbOnRight: true, thumb: colour(0x174940))
-    track(y: 323, fill: colour(0x467B70), thumbOnRight: false, thumb: colour(0xEBFFF2))
+    context.interpolationQuality = .high
+    context.draw(artwork, in: body)
     context.restoreGState()
 
     return bitmap.representation(using: .png, properties: [:])

@@ -61,6 +61,16 @@ actor PoolState {
     private var fableRechecks: [String: FableRecheck] = [:]
     private var conversations: [String: Conversation] = [:]
     private var recent: [PoolRouting] = []
+    private var activeRoutes: [UUID: PoolActiveRoute] = [:]
+
+    func beginAttempt(_ id: UUID, from: String, member: String, model: String?) {
+        activeRoutes[id] = PoolActiveRoute(from: from, member: member, model: model, startedAt: Date())
+    }
+
+    func finishRequest(_ id: UUID) {
+        activeRoutes.removeValue(forKey: id)
+    }
+
     nonisolated let clients = RelayClients()
 
     private func accountKey(_ id: String) -> String {
@@ -380,6 +390,7 @@ actor PoolState {
         return PoolStatus(binary: binary, pid: pid, started: started,
                           enabled: configuration?.enabled ?? false,
                           configured: configuration != nil, members: members,
-                          recent: recent, sessions: Array(sessions), openExchanges: clients.inFlight)
+                          recent: recent, sessions: Array(sessions), openExchanges: clients.inFlight,
+                          activeRoutes: Array(activeRoutes.values.sorted { $0.startedAt > $1.startedAt }.prefix(64)))
     }
 }

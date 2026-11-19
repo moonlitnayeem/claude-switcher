@@ -651,6 +651,11 @@ first.start()
 try:
     check(entered.wait(3), "the first caller claims the Fable recheck before its reply arrives")
     check(recheck_pending(control({})), "the recheck remains pending while the lender is answering")
+    live = control({}).get("activeRoutes", [])
+    check(any(route["from"] == "scope-home" and route["member"] == scope and route["model"] == fable_model
+              for route in live), "the live routing map identifies the actual in-flight backup and model")
+    check(all(set(route) == {"from", "member", "model", "startedAt"} for route in live),
+          "live routing metadata excludes the request body, session and credentials")
     control({"recheckFable": scope})
     response, _, went = ask(conn, "tok-scope-home", body=fable_turn, session="fable-second-caller")
     check(response.status == 200 and [w["token"] for w in went if w["session"] == "fable-second-caller"] == ["tok-scope-home"],
@@ -660,6 +665,10 @@ finally:
     first.join(timeout=6)
 check(first_reply == [(200, [lender, "tok-scope-home"])] and not recheck_pending(control({})),
       "only the first request probes the lender and its refusal clears the pending indicator")
+for _ in range(40):
+    if not control({}).get("activeRoutes"): break
+    time.sleep(.025)
+check(not control({}).get("activeRoutes"), "the live routing map returns to idle when both requests finish")
 del accounts[lender]["gate"]
 
 # A provider-held thread starts afresh when the new lender has never seen it.

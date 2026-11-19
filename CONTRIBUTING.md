@@ -1,6 +1,6 @@
-# Contributing to Claude Switcher
+# Contributing to AI Switcher
 
-Claude Switcher is a native macOS fork of Claude Graft. Changes to account routing, profile ownership or chat history need regression coverage for the behavior a user can observe. The inherited design notes document storage formats and failure cases encountered in earlier versions. [Working on Claude Switcher](CLAUDE.md) · [Design notes](notes)
+AI Switcher is a native macOS fork of Claude Graft. Changes to account routing, profile ownership or chat history need regression coverage for the behavior a user can observe. The inherited design notes document storage formats and failure cases encountered in earlier versions. [Working on AI Switcher](CLAUDE.md) · [Design notes](notes)
 
 ## Build and test
 
@@ -13,7 +13,7 @@ Use a macOS Swift toolchain with AppKit and SwiftUI. The app targets macOS 13 or
 ./build.sh
 ```
 
-The native app is written to `build.noindex/Claude Switcher.app`. Set `SWITCHER_UNIVERSAL=1` for an Apple silicon and Intel build. The layout tests exercise the English and Russian interfaces and use macOS Accessibility for external control checks. To capture the routing dashboard with fictional accounts, run `Tools/render-dashboard.sh`. It writes the light, dark and empty-state images under `build.noindex/dashboard-previews/`. Screen capture requires a graphical macOS session.
+The native app is written to `build.noindex/AI Switcher.app`. Set `SWITCHER_UNIVERSAL=1` for an Apple silicon and Intel build. The layout tests exercise the English and Russian interfaces and use macOS Accessibility for external control checks. To capture the routing dashboard with fictional accounts, run `Tools/render-dashboard.sh`. It writes the light, dark and empty-state images under `build.noindex/dashboard-previews/`. Screen capture requires a graphical macOS session.
 
 Use a disposable profile for manual experiments. A shortcut bundles its own launcher, and existing shortcuts receive a new launcher when its version changes. For a development test, create a disposable shortcut with the launcher you intend to exercise.
 

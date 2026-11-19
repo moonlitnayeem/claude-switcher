@@ -20,6 +20,6 @@ with DSStore.open(str(destination), "w+") as store:
         "showIconPreview": True, "showItemInfo": False, "scrollPositionX": 0.0,
         "scrollPositionY": 0.0,
     }
-    store["Claude Switcher.app"]["Iloc"] = (145, 88)
+    store["AI Switcher.app"]["Iloc"] = (145, 88)
     store["Applications"]["Iloc"] = (435, 88)
     store["Installation.txt"]["Iloc"] = (290, 218)

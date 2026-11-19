@@ -29,25 +29,37 @@ let fixtureSession: URLSession = {
     return URLSession(configuration: configuration)
 }()
 
+guard CommandLine.arguments.count == 3,
+      let brandIcon = NSImage(contentsOfFile: CommandLine.arguments[2]) else {
+    fatalError("Pass the path to the bundled AppIcon.icns after the output directory.")
+}
 let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+let demoDefaultsName = "ai-switcher-preview-" + UUID().uuidString
+let demoDefaults = UserDefaults(suiteName: demoDefaultsName)!
+defer { demoDefaults.removePersistentDomain(forName: demoDefaultsName) }
+demoDefaults.set("Personal", forKey: "openai.firstLabel")
+demoDefaults.set("Studio", forKey: "openai.secondLabel")
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 app.finishLaunching()
 
 @MainActor
-func capture(_ name: String, dark: Bool, compact: Bool) throws {
-    let content = ContentView(routingPreview: AnyView(DemoDashboard(empty: compact)))
+func capture(_ name: String, dark: Bool, compact: Bool, movie: Bool = false, openAI: Bool = false) throws {
+    let frames = DemoFrames()
+    let demo = movie ? AnyView(DemoRoutingSequence(frames: frames)) : AnyView(DemoDashboard(empty: compact))
+    let content = ContentView(selection: openAI ? ContentView.openAIID : ContentView.routingID, routingPreview: demo, brandIcon: brandIcon)
+        .defaultAppStorage(demoDefaults)
         .environmentObject(Shared.store).environmentObject(Shared.settings).environmentObject(Shared.usage)
         .environment(\.colorScheme, dark ? .dark : .light)
     let controller = NSHostingController(rootView: content)
     controller.sizingOptions = []
     if #available(macOS 14, *) { controller.sceneBridgingOptions = .all }
-    let size = NSSize(width: compact ? 780 : 1000, height: compact ? 550 : 690)
+    let size = NSSize(width: compact ? 780 : 1000, height: compact ? 550 : 756)
     let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    window.title = "Claude Switcher"
+    window.title = "AI Switcher"
     window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     window.contentViewController = controller
     window.setContentSize(size)
@@ -55,27 +67,45 @@ func capture(_ name: String, dark: Bool, compact: Bool) throws {
     app.activate(ignoringOtherApps: true)
     window.makeKeyAndOrderFront(nil)
     defer { window.close() }
-    let deadline = Date(timeIntervalSinceNow: 0.45)
-    while Date() < deadline {
-        if let event = app.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.02),
+    func update(until deadline: Date) {
+        while Date() < deadline {
+            if let event = app.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.02),
                                      inMode: .default, dequeue: true) {
-            app.sendEvent(event)
+                app.sendEvent(event)
+            }
+            app.updateWindows()
         }
-        app.updateWindows()
+        window.displayIfNeeded()
     }
-    window.displayIfNeeded()
-    let url = output.appendingPathComponent(name + ".png")
-    let screenshot = Process()
-    screenshot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    screenshot.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
-    try screenshot.run()
-    screenshot.waitUntilExit()
-    guard screenshot.terminationStatus == 0,
-          let image = NSImage(contentsOf: url), image.size.width >= size.width - 2 else {
-        throw NSError(domain: "DashboardFixture", code: 1, userInfo: [
-            NSLocalizedDescriptionKey: "The fixture window could not be captured at its requested size."])
+    func record(_ url: URL) throws {
+        let screenshot = Process()
+        screenshot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        screenshot.arguments = ["-x", "-o", "-l", String(window.windowNumber), url.path]
+        try screenshot.run()
+        screenshot.waitUntilExit()
+        guard screenshot.terminationStatus == 0,
+              let image = NSImage(contentsOf: url), image.size.width >= size.width - 2 else {
+            throw NSError(domain: "DashboardFixture", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "The fixture window could not be captured at its requested size."])
+        }
     }
-    print(url.path)
+    update(until: Date(timeIntervalSinceNow: 0.42))
+    if movie {
+        let folder = output.appendingPathComponent(name, isDirectory: true)
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        let began = Date()
+        for i in 0..<56 {
+            if i == 17 { frames.step = .backup }
+            if i == 38 { frames.step = .done }
+            update(until: max(Date(timeIntervalSinceNow: 0.035), began.addingTimeInterval(Double(i) / 8)))
+            try record(folder.appendingPathComponent(String(format: "%03d.png", i)))
+        }
+        print(folder.path)
+    } else {
+        let url = output.appendingPathComponent(name + ".png")
+        try record(url)
+        print(url.path)
+    }
 }
 
 precondition(RoutingDashboard.modelName("claude-fable-5-2") == "Fable 5.2")
@@ -84,4 +114,8 @@ try MainActor.assumeIsolated {
     try capture("routing-light", dark: false, compact: false)
     try capture("routing-dark", dark: true, compact: false)
     try capture("routing-empty", dark: false, compact: true)
+    try capture("openai-accounts", dark: false, compact: false, openAI: true)
+    if ProcessInfo.processInfo.environment["SWITCHER_ROUTING_FRAMES"] == "1" {
+        try capture("routing-frames", dark: true, compact: false, movie: true)
+    }
 }

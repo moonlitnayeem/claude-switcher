@@ -1,5 +1,5 @@
 name: Bug report
-description: Report an issue with Claude Switcher
+description: Report an issue with AI Switcher
 labels: [bug]
 body:
   - type: textarea
@@ -13,7 +13,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Claude Switcher version
+      label: AI Switcher version
       description: Find the version in the menu bar dropdown or Finder’s Get Info for the app.
     validations:
       required: true
@@ -49,7 +49,7 @@ body:
     attributes:
       label: Relevant diagnostic excerpt (optional)
       description: >
-        Claude Switcher keeps diagnostics.log and state-report.txt under
+        AI Switcher keeps diagnostics.log and state-report.txt under
         ~/Library/Application Support/ClaudeSwitcher/. Paste only lines relevant to the
         issue after redacting names, email addresses, local paths and account, organization
         or session IDs. Keep credentials, Keychain exports and conversation contents private.

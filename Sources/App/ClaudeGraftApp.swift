@@ -15,7 +15,7 @@ struct ClaudeGraftApp: App {
     private var usage: UsageMonitor { Shared.usage }
 
     var body: some Scene {
-        WindowGroup("Claude Switcher", id: Self.mainWindowID) {
+        WindowGroup("AI Switcher", id: Self.mainWindowID) {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(settings)
@@ -27,7 +27,7 @@ struct ClaudeGraftApp: App {
                     if !Shared.startHidden { NSApp.setActivationPolicy(.regular) }
                 }
         }
-        .defaultSize(width: 1000, height: 690)
+        .defaultSize(width: 1040, height: 760)
         .commands {
             CommandGroup(replacing: .newItem) {}
             // View › Show/Hide Sidebar, with the shortcut every Mac sidebar has.
@@ -64,6 +64,7 @@ enum Shared {
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @State private var problem: String?
+    @AppStorage(GraftConnection.preference) private var useExistingGraft = false
 
     var body: some View {
         Form {
@@ -74,9 +75,17 @@ struct SettingsView: View {
                     .identified("open-at-login")
                 Toggle("Show in Menu Bar", isOn: $settings.showInMenuBar)
                     .identified("show-in-menu-bar")
-                FrontClaudeControl()
-                    .disabled(!settings.showInMenuBar)
-                ManualUpdateControl()
+                if !GraftConnection.isEnabled {
+                    FrontClaudeControl().disabled(!settings.showInMenuBar)
+                    ManualUpdateControl()
+                }
+                if GraftConnection.isEnabled || GraftConnection().settingsExist {
+                    Toggle("Use my existing Graft setup", isOn: $useExistingGraft)
+                        .identified("use-existing-graft")
+                    if useExistingGraft != GraftConnection.isEnabled {
+                        Text("Quit and reopen AI Switcher to use this setting.").font(.caption)
+                    }
+                }
                 Button("Download Updates…") { Links.open(Links.releases) }
                     .identified("download-updates")
             } footer: {
@@ -106,6 +115,11 @@ struct SettingsView: View {
 /// icon goes with the window so it behaves like the utility it is.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
+    private var graftMenuBar: GraftConnectionMenuBar?
+    @MainActor private var hasMenuItem: Bool {
+        if let graftMenuBar { return graftMenuBar.isShowing }
+        return menuBar?.isShowing == true
+    }
     /// Guards against hiding the app before its first window ever appears.
     private var hasShownWindow = false
     /// Set by Quit in the dropdown, and by nothing else. See `applicationShouldTerminate`.
@@ -121,6 +135,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         let wantsWindow = UserDefaults.standard.object(forKey: Self.windowOpenKey) as? Bool ?? true
         Shared.startHidden = !wantsWindow && Shared.settings.showInMenuBar
+        if GraftConnection.isEnabled {
+            // The existing Graft instance owns all profile and relay settings.
+            graftMenuBar = GraftConnectionMenuBar(settings: Shared.settings) { [weak self] in self?.showMainWindow() }
+            watchForWindowClose()
+            watchForShutdown()
+            return
+        }
         // A login launch puts nothing on screen, so there is nobody to read a
         // keychain dialog; the first poll stays quiet and the prompt waits for
         // the window or the dropdown.
@@ -185,9 +206,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if QuitPolicy.endsTheApp(askedFor: Self.quitWasAskedFor,
                                  installingUpdate: false,
                                  systemGoingDown: systemIsGoingDown,
-                                 menuBarShowing: menuBar?.isShowing == true) {
+                                 menuBarShowing: hasMenuItem) {
             Self.isTerminating = true
-            Shared.updateRecovery.stop()
+            if !GraftConnection.isEnabled { Shared.updateRecovery.stop() }
             return .terminateNow
         }
         hideToMenuBar()
@@ -211,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + WindowPolicy.placementGrace) { [weak self] in
             guard let self,
-                  WindowPolicy.showsWindowAfterHiddenLaunch(menuBarShowing: self.menuBar?.isShowing == true,
+                  WindowPolicy.showsWindowAfterHiddenLaunch(menuBarShowing: self.hasMenuItem,
                                                             hasWindow: Self.hasVisibleWindow)
             else { return }
             Diagnostics.note("window.shown", ["reason": "status item out of reach after a hidden launch"])
@@ -231,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func showMainWindow() {
-        Shared.usage.mayPromptUnasked = true
+        if !GraftConnection.isEnabled { Shared.usage.mayPromptUnasked = true }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
@@ -264,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeMainNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             guard !Shared.startHidden, !Self.isTerminating else { return }
-            Shared.usage.mayPromptUnasked = true
+            if !GraftConnection.isEnabled { Shared.usage.mayPromptUnasked = true }
             self?.hasShownWindow = true
             UserDefaults.standard.set(true, forKey: Self.windowOpenKey)
         }
@@ -281,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard WindowPolicy.hidesDockIcon(showInMenuBar: Shared.settings.showInMenuBar,
                                          hasShownWindow: hasShownWindow,
                                          hasWindow: Self.hasVisibleWindow,
-                                         menuBarShowing: menuBar?.isShowing == true)
+                                         menuBarShowing: hasMenuItem)
         else { return }
         UserDefaults.standard.set(false, forKey: Self.windowOpenKey)
         NSApp.setActivationPolicy(.accessory)

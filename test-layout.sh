@@ -2,7 +2,14 @@
 # Exercises the real window with temporary profiles and mocked update replies.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-BUILD="${SWITCHER_LAYOUT_BUILD_DIR:-$ROOT/build.noindex/layout-tests}"
+# A synced Documents folder can add Finder metadata while the bundle is being signed.
+# A fresh local fixture also keeps concurrent test runs independent.
+if [[ -n "${SWITCHER_LAYOUT_BUILD_DIR:-}" ]]; then
+    BUILD="$SWITCHER_LAYOUT_BUILD_DIR"
+else
+    BUILD="$(mktemp -d "${TMPDIR:-/tmp}/ai-switcher-layout.XXXXXX")"
+    trap 'rm -rf "$BUILD"' EXIT
+fi
 APP="$BUILD/Layout Checks.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 

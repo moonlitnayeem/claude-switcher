@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Only display data crosses into the dashboard. Credentials and conversation contents stay in the controller.
 struct RoutingAccountDisplay: Identifiable {
@@ -22,6 +23,8 @@ struct RoutingDisplay {
     var lastModel: String?
     var lastAnswered: Date?
     var latestFailure: String?
+    var route: RouteMapSignal?
+    var externallyManaged = false
 }
 
 struct RoutingDashboard: View {
@@ -86,6 +89,15 @@ struct RoutingDashboard: View {
         var result = RoutingDisplay(title: L10n.text(summary.0), detail: L10n.text(summary.1), ready: summary.2,
                                     accounts: rows, lastAccount: last.map { name($0.servedBy) },
                                     lastModel: last?.model.map(Self.modelName), lastAnswered: last?.at)
+        if let live = pool.status?.activeRoutes?.filter({ $0.from == key }).max(by: { $0.startedAt < $1.startedAt }) {
+            result.route = RouteMapSignal(phase: .sending, backup: live.member != key,
+                                          model: live.model.map(Self.modelName), at: live.startedAt,
+                                          mainLimited: !PoolPolicy.hasRoom(pool.status?.members.first { $0.id == key }?.limits,
+                                                                           now: Date(), model: live.model))
+        } else if let recent = history.last {
+            result.route = RouteMapSignal(phase: (200..<300).contains(recent.status) ? .answered : .failed,
+                                          backup: recent.servedBy != key, model: recent.model.map(Self.modelName), at: recent.at)
+        }
         if let failed = history.last, !(200..<300).contains(failed.status) {
             let model = failed.model.map(Self.modelName) ?? "Claude Code"
             result.latestFailure = failed.status == 429
@@ -103,7 +115,7 @@ struct RoutingDashboard: View {
             return ("Switching is off", "Turn it on to use backup accounts for Claude Code requests.", false)
         }
         guard !lenders.isEmpty else {
-            return ("Add a backup account", "Connect another account to start switching Claude Code requests.", false)
+            return ("Add a backup account", "Add another account so Claude has somewhere to go when your main account runs out.", false)
         }
         if pool.lendingPaused {
             return ("Keychain access needed", "Unlock the keychain to refresh the accounts available for switching.", false)
@@ -127,7 +139,7 @@ struct RoutingDashboard: View {
             guard rows.dropFirst().contains(where: { !$0.needsAttention && pool.lending[$0.id] == .ready }) else {
                 return ("Checking account access", "The relay is connected and is checking the backup accounts.", false)
             }
-            return ("Ready to switch", "Claude Code uses your primary account first. When it reaches a limit, an available backup can take over.", true)
+            return ("Ready to switch", "Claude uses your main account first. If it runs out, a backup can answer.", true)
         default:
             return ("Connecting", "Waiting for the routing service and this Claude profile to connect.", false)
         }
@@ -186,69 +198,24 @@ struct RoutingDashboard: View {
     }
 }
 
-private let pine = Color(red: 0.10, green: 0.23, blue: 0.19)
-private let mint = Color(red: 0.71, green: 0.91, blue: 0.76)
-
-/// Two paths join at the same destination, at both sidebar and illustration sizes.
-struct SwitcherMark: View {
-    var body: some View {
-        Canvas { context, size in
-            let u = min(size.width, size.height) / 40
-            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x*u, y: y*u) }
-            var path = Path()
-            path.move(to: point(8, 29)); path.addLine(to: point(13, 29))
-            path.addCurve(to: point(27, 11), control1: point(20, 29), control2: point(20, 11))
-            path.addLine(to: point(32, 11))
-            context.stroke(path, with: .color(mint), style: StrokeStyle(lineWidth: 4*u, lineCap: .round))
-            var echo = Path()
-            echo.move(to: point(8, 11)); echo.addLine(to: point(13, 11))
-            echo.addQuadCurve(to: point(18, 15), control: point(16, 11))
-            echo.move(to: point(22, 25)); echo.addQuadCurve(to: point(28, 29), control: point(25, 29))
-            echo.addLine(to: point(32, 29))
-            context.stroke(echo, with: .color(.white.opacity(0.65)), style: StrokeStyle(lineWidth: 4*u, lineCap: .round))
-        }.accessibilityHidden(true)
-    }
-}
-
 struct SwitcherBrand: View {
+    var icon: NSImage?
+
+    private static let appIcon: NSImage = {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let image = NSImage(contentsOf: url) { return image }
+        return NSWorkspace.shared.icon(for: .applicationBundle)
+    }()
+
     var body: some View {
-        HStack(spacing: 9) {
-            SwitcherMark().frame(width: 34, height: 34)
-                .background(pine, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            Text("Claude Switcher").font(.system(size: 16, weight: .semibold))
+        HStack(spacing: 10) {
+            Image(nsImage: icon ?? Self.appIcon)
+                .resizable().interpolation(.high).scaledToFit()
+                .frame(width: 36, height: 36)
+                .accessibilityHidden(true)
+            Text("AI Switcher").font(.system(size: 17, weight: .bold, design: .rounded))
             Spacer(minLength: 0)
         }.padding(.horizontal, 17).padding(.vertical, 14)
-    }
-}
-
-private struct RoutingDiagram: View {
-    var body: some View {
-        Canvas { context, size in
-            let w = size.width, h = size.height
-            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: w*x, y: h*y) }
-            for i in 0..<12 {
-                for j in 0..<7 {
-                    let point = p(CGFloat(i)/11, CGFloat(j)/6)
-                    context.fill(Path(ellipseIn: CGRect(x: point.x, y: point.y, width: 1.5, height: 1.5)),
-                                 with: .color(mint.opacity(0.20)))
-                }
-            }
-            for (index, height) in [0.22, 0.50, 0.78].enumerated() {
-                let start = p(0.04, height)
-                var path = Path(); path.move(to: start)
-                path.addLine(to: p(0.22, height))
-                path.addCurve(to: p(0.60, 0.5), control1: p(0.40, height), control2: p(0.40, 0.5))
-                path.addLine(to: p(0.86, 0.50))
-                let paint = index == 0 ? mint : mint.opacity(0.30)
-                context.stroke(path, with: .color(paint), style: StrokeStyle(lineWidth: index == 0 ? 2.2 : 1.3, lineCap: .round))
-                context.fill(Path(ellipseIn: CGRect(x: start.x-3, y: start.y-3, width: 6, height: 6)), with: .color(paint))
-            }
-            let end = p(0.86, 0.5)
-            for (radius, opacity) in [(12.0, 0.10), (7.5, 0.21), (3.5, 1.0)] {
-                context.fill(Path(ellipseIn: CGRect(x: end.x-radius, y: end.y-radius, width: 2*radius, height: 2*radius)),
-                             with: .color(mint.opacity(opacity)))
-            }
-        }.accessibilityHidden(true)
     }
 }
 
@@ -263,12 +230,12 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     @Environment(\.colorScheme) private var scheme
 
     private var canvas: Color {
-        scheme == .dark ? Color(red: 0.105, green: 0.12, blue: 0.115) : Color(red: 0.965, green: 0.967, blue: 0.950)
+        scheme == .dark ? Color(red: 0.065, green: 0.078, blue: 0.103) : Color(red: 0.955, green: 0.964, blue: 0.975)
     }
     private var paper: Color {
-        scheme == .dark ? Color(red: 0.14, green: 0.155, blue: 0.15) : Color(red: 1, green: 1, blue: 0.99)
+        scheme == .dark ? Color(red: 0.106, green: 0.122, blue: 0.157) : .white
     }
-    private var accent: Color { scheme == .dark ? mint : Color(red: 0.13, green: 0.36, blue: 0.26) }
+    private var accent: Color { scheme == .dark ? OrbitInk.aqua : Color(red: 0.075, green: 0.35, blue: 0.39) }
 
     var body: some View {
         GeometryReader { geo in
@@ -276,15 +243,15 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: compact ? 17 : 22) {
                     HStack(alignment: .center) {
-                        Text("Routing").font(.system(size: compact ? 29 : 34, weight: .semibold))
+                        Text("Claude Code").font(.system(size: compact ? 27 : 32, weight: .bold, design: .rounded))
                             .accessibilityAddTraits(.isHeader).identified("routing.dashboard")
                         Spacer(minLength: 8)
                         profile()
                     }
-                    hero(compact: compact, width: geo.size.width)
+                    RoutingOrbitCard(data: data, enabled: $enabled, canSwitch: canSwitch, compact: compact)
                     VStack(alignment: .leading, spacing: 9) {
                         HStack {
-                            heading("Accounts")
+                            heading("Your accounts")
                             Spacer(minLength: 4)
                             accountActions().tint(accent)
                         }
@@ -296,7 +263,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                             if data.accounts.count <= 1 {
                                 Divider()
                                 HStack(spacing: 9) {
-                                    Image(systemName: "person.crop.circle.badge.plus")
+                                    Image(systemName: "person.crop.circle.badge.plus").accessibilityHidden(true)
                                     Text("Add another signed-in account to give this profile a backup.")
                                         .fixedSize(horizontal: false, vertical: true)
                                     Spacer(minLength: 0)
@@ -306,7 +273,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                     }
                     VStack(alignment: .leading, spacing: 9) {
                         HStack {
-                            heading("Routing activity")
+                            heading("Recent activity")
                             Spacer(minLength: 0)
                             manage().font(.callout).buttonStyle(RoutingTextButtonStyle(color: accent))
                         }
@@ -323,44 +290,9 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
         Text(title).font(.system(size: 18, weight: .semibold)).accessibilityAddTraits(.isHeader)
     }
 
-    private func hero(compact: Bool, width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .center) {
-                Label("Automatic switching", systemImage: "arrow.triangle.branch")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(mint)
-                Spacer(minLength: 8)
-                Text(enabled ? "On" : "Off").font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.86)).accessibilityHidden(true)
-                Toggle("Automatic switching", isOn: $enabled).labelsHidden().toggleStyle(.switch)
-                    .tint(Color(red: 0.38, green: 0.71, blue: 0.48))
-                    .environment(\.colorScheme, .dark).disabled(!canSwitch)
-                    .accessibilityLabel("Automatic switching").identified("routing.automatic")
-                    .help("Allow this profile to use the accounts listed below for Claude Code requests.")
-            }
-            Rectangle().fill(mint.opacity(0.22)).frame(height: 1)
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(data.title).font(.system(size: compact ? 23 : 28, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
-                    Text(data.detail).font(.callout).foregroundStyle(Color.white.opacity(0.84))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                if width >= 470 {
-                    RoutingDiagram().frame(width: compact ? 89 : 142, height: compact ? 52 : 62)
-                        .opacity(data.ready ? 1 : 0.65)
-                }
-            }
-        }
-        .padding(compact ? 16 : 19)
-        .background(LinearGradient(colors: [pine, Color(red: 0.12, green: 0.29, blue: 0.23)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
     private func accountRow(_ item: RoutingAccountDisplay, compact: Bool) -> some View {
         HStack(alignment: .top, spacing: 11) {
-            Image(systemName: item.isPrimary ? "person.crop.circle" : "square.stack.3d.up")
+            Image(systemName: item.isPrimary ? "person.fill" : "person.2.fill")
                 .font(.system(size: 16, weight: .medium)).foregroundStyle(accent)
                 .frame(width: 33, height: 33)
                 .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -369,7 +301,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                 Text(item.name).font(.system(size: 14, weight: .semibold)).lineLimit(2)
                     .truncationMode(.middle).textSelection(.enabled)
                 HStack(spacing: 5) {
-                    Text(L10n.text(item.isPrimary ? "Primary" : "Backup"))
+                    Text(L10n.text(item.isPrimary ? "Main" : "Backup"))
                     Text("·").accessibilityHidden(true)
                     Text(item.state).foregroundStyle(item.needsAttention ? Color.primary : .secondary)
                 }.font(.caption).foregroundStyle(.secondary)
@@ -421,7 +353,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
             if let at = data.lastAnswered, let name = data.lastAccount {
                 HStack(spacing: 9) {
                     Image(systemName: "checkmark.circle").foregroundStyle(accent).accessibilityHidden(true)
-                    Text("Last successful request").font(.callout.weight(.medium))
+                    Text("Last reply").font(.callout.weight(.medium))
                     Spacer(minLength: 4)
                     Text(at, format: .dateTime.month(.abbreviated).day().hour().minute())
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)

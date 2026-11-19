@@ -280,6 +280,7 @@ final class UsagePoolController: ObservableObject {
     }
 
     func start(store: ShortcutStore, usage: UsageMonitor) {
+        guard !GraftConnection.isEnabled else { return }
         attach(store: store, usage: usage)
         schedule()
         watchClaudes()
@@ -729,7 +730,7 @@ final class UsagePoolController: ObservableObject {
     /// only the shortcut list and the usage figures, which belong to the main
     /// thread, are read here.
     func sync() {
-        guard let store, let usage else { return }
+        guard !GraftConnection.isEnabled, let store, let usage else { return }
         prune(against: store)
         if syncing {
             syncAgain = true
@@ -840,7 +841,7 @@ final class UsagePoolController: ObservableObject {
                 }
                 problem = problem ?? (paused
                     ? L10n.text("Lending is paused until the keychain is opened")
-                    : L10n.text("Claude Switcher needs keychain access to set up Claude Code for sharing."))
+                    : L10n.text("AI Switcher needs keychain access to set up Claude Code for sharing."))
             }
 
             let records = self.lookUpRecords(status?.sessions ?? [], profiles: claudeProfiles)
@@ -1210,7 +1211,7 @@ final class UsagePoolController: ObservableObject {
             return (nil, L10n.text("Sharing usage needs macOS 15 or later."))
         }
         guard let executable = Self.relayExecutable, let expected = Self.bundledDigest else {
-            return (nil, L10n.text("This copy of Claude Switcher has no relay in it."))
+            return (nil, L10n.text("This copy of AI Switcher has no relay in it."))
         }
         let allowedLenders = complete ? nil : Dictionary(uniqueKeysWithValues: configuration.members.compactMap { member in
             member.borrowsFrom.map { (member.id, $0) }

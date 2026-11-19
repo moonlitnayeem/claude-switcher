@@ -530,6 +530,14 @@ struct PoolMemberStatus: Codable, Equatable {
     var fableRecheckPending: Bool? = nil
 }
 
+/// Only the selected account and model are needed to draw a live request.
+struct PoolActiveRoute: Codable, Equatable {
+    var from: String
+    var member: String
+    var model: String?
+    var startedAt: Date
+}
+
 struct PoolStatus: Codable, Equatable {
     /// Digest of the executable that is running, so Graft can tell a relay left
     /// over from an earlier version.
@@ -543,6 +551,7 @@ struct PoolStatus: Codable, Equatable {
     /// Most recent first, and only the last day's.
     var sessions: [PoolSession]
     var openExchanges: Int
+    var activeRoutes: [PoolActiveRoute]? = nil
 }
 
 enum PoolSocket {

@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an improvement to Claude Switcher
+description: Suggest an improvement to AI Switcher
 labels: [enhancement]
 body:
   - type: textarea

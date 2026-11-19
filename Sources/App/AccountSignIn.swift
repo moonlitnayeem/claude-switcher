@@ -104,7 +104,7 @@ final class AccountSignIn: ObservableObject {
             case .timedOut:
                 return L10n.text("Nothing came back from the browser, so the sign-in was abandoned.")
             case .listener:
-                return L10n.text("Claude Switcher could not listen for the browser's answer on this Mac.")
+                return L10n.text("AI Switcher could not listen for the browser's answer on this Mac.")
             case .declined(let reason):
                 return reason.map { L10n.format("The sign-in was not completed: %@", $0) }
                     ?? L10n.text("The sign-in was not completed.")
@@ -150,7 +150,7 @@ final class AccountSignIn: ObservableObject {
             // somewhere else: a stale tab, or a page poking at the port.
             guard query["state"] == state else {
                 Loopback.respond(connection, status: 400,
-                                 page: Self.page(L10n.text("This sign-in link is out of date. Start again from Claude Switcher.")))
+                                 page: Self.page(L10n.text("This sign-in link is out of date. Start again from AI Switcher.")))
                 continue
             }
             guard let code = query["code"] else {
@@ -163,7 +163,7 @@ final class AccountSignIn: ObservableObject {
             switch result {
             case .success(let account):
                 Loopback.respond(connection, status: 200, page: Self.page(
-                    L10n.format("%@ is signed in. You can close this tab and go back to Claude Switcher.",
+                    L10n.format("%@ is signed in. You can close this tab and go back to AI Switcher.",
                                 account.email ?? L10n.text("The account"))))
             case .failure(let failure):
                 Loopback.respond(connection, status: 200, page: Self.page(failure.message))
@@ -264,7 +264,7 @@ final class AccountSignIn: ObservableObject {
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
         return """
-            <!doctype html><html><head><meta charset="utf-8"><title>Claude Switcher</title>
+            <!doctype html><html><head><meta charset="utf-8"><title>AI Switcher</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
             :root { color-scheme: light dark; }

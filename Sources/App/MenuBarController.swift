@@ -106,7 +106,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         item.button?.imagePosition = .imageLeading
         item.button?.image = NSImage(systemSymbolName: StatusSymbol.idle,
-                                     accessibilityDescription: "Claude Switcher")
+                                     accessibilityDescription: "AI Switcher")
         // The only handle a script has on the item: its title is a figure
         // that changes on every pass, and the bar holds no other name for it.
         item.button?.setAccessibilityIdentifier("status-item")
@@ -158,7 +158,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // mark would only take room from a bar that has little to spare. An
         // update keeps its symbol: that is news the front Claude cannot carry.
         let symbol = alert ?? (front == nil ? StatusSymbol.idle : nil)
-        button.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "Claude Switcher") }
+        button.image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "AI Switcher") }
         let headline = front ?? usage.statusEntry(front: nil)?.entry
         let figures = headline?.currentUsage
         parts = front != nil || figures != nil ? (icon, tag, figures?.headline) : nil
@@ -395,7 +395,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // server keeps its own copy of a window's name apart from the one
         // VoiceOver reads, and a client that compared the two refused to act
         // on a window where they disagreed, so both are set.
-        let name = L10n.text("Claude Switcher Menu")
+        let name = L10n.text("AI Switcher Menu")
         window.title = name
         window.setAccessibilityTitle(name)
         // AppKit hangs a popover under the status item and leaves it out of

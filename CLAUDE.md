@@ -1,4 +1,4 @@
-# Working on Claude Switcher
+# Working on AI Switcher
 
 ## Style, first
 
@@ -35,7 +35,7 @@ one line here as well.
 
 ## Development and verification
 
-Claude Switcher is the independent macOS fork at [moonlitnayeem/claude-switcher](https://github.com/moonlitnayeem/claude-switcher). The notes under `notes/` describe the original Graft implementation and its history. Use this fork’s code, tests, and package scripts for current behavior.
+AI Switcher is the independent macOS fork at [moonlitnayeem/claude-switcher](https://github.com/moonlitnayeem/claude-switcher). The notes under `notes/` describe the original Graft implementation and its history. Use this fork’s code, tests, and package scripts for current behavior.
 
 Keep development tests separate from anyone’s running conversation. Use isolated fixture profiles and the local stand-in relay service for routing checks. Opening, quitting or modifying a real Claude profile can interrupt its work. The dashboard render script substitutes fictional account data and a local update response.
 
@@ -54,7 +54,7 @@ The graphical layout suite uses Accessibility. `./test-opening.sh` exercises lau
 
 ### Opening a profile — [notes/opening-profiles.md](notes/opening-profiles.md)
 
-- **Never touch an app Graft did not create.** Check the fork’s ownership marker and the validated profile binding before changing a bundle. `Claude`, `Claude Graft` and `Claude Switcher` are reserved.
+- **Never touch an app Graft did not create.** Check the fork’s ownership marker and the validated profile binding before changing a bundle. `Claude`, `Claude Graft` and `AI Switcher` are reserved.
 - **Profile folders are validated:** one plain component inside Application Support, never `Claude`, never a path. Reserved names and shared folders are compared as the disk compares them, ignoring case (`Graft.isNamed`), and `deleteProfile` refuses Graft's own folder.
 - **Every route that opens a profile asks first** through `ChatConflict`; the suite fails if one of the three views stops naming it.
 - **A missing shortcut is never permission to open another profile.** `ProfileOpener` reports an error instead.

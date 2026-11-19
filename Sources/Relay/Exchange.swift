@@ -111,6 +111,9 @@ final class Exchange {
                                         bound: continuing || PoolRequest.carriesBoundReasoning(body: body, model: model),
                                         model: model, continuing: continuing)
 
+        // A connection can carry successive requests, and several profiles can stream concurrently.
+        let requestID = UUID()
+        defer { Task { await self.state.finishRequest(requestID) } }
         var passed: [PoolPass] = []
         var primaryRefusal: (answer: (head: HTTPHead, raw: Data), body: Data)?
         var index = 0
@@ -141,6 +144,7 @@ final class Exchange {
                                               authorization: attempt.token.map { "Bearer \($0)" },
                                               plainAnswer: continuing && (borrowed || attempt.fableRecheck != nil))
             let answer: (head: HTTPHead, raw: Data)
+            await state.beginAttempt(requestID, from: own, member: attempt.member ?? own, model: model)
             do {
                 answer = try await send(request)
             } catch {

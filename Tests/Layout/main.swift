@@ -24,6 +24,7 @@ final class UpdateResponse: URLProtocol {
     override func stopLoading() {}
 }
 
+setvbuf(stdout, nil, _IOLBF, 0)
 URLProtocol.registerClass(UpdateResponse.self)
 let layoutSession: URLSession = {
     let configuration = URLSessionConfiguration.ephemeral
@@ -315,6 +316,7 @@ struct Page {
 }
 let pages = [
     Page(name: "routing", selection: ContentView.routingID, profile: nil),
+    Page(name: "openai", selection: ContentView.openAIID, profile: nil),
     Page(name: "claude", selection: ContentView.mainProfileID, profile: Graft.mainProfile),
     Page(name: "claude-2", selection: shortcut.id, profile: shortcut.profileDir),
     Page(name: "claude-3-draft", selection: draft.id, profile: draft.profileDir),
@@ -378,7 +380,7 @@ for page in pages {
     window.setContentSize(NSSize(width: 820, height: 560))
     let hosting = controller.view
     window.appearance = NSAppearance(named: appearance)
-    window.title = "Claude Switcher"
+    window.title = "AI Switcher"
     if ProcessInfo.processInfo.environment["GRAFT_LAYOUT_VISIBLE"] == "1" {
         window.orderFront(nil)
     } else {
@@ -473,12 +475,27 @@ for page in pages {
                         check(seen(window).flatMap { element(id, in: $0) }?.value == initial,
                               "\(place): pressing again restores the fixture's routing state")
                     }
-                    for control in ["sidebar.routing", "routing.automatic", "shared-usage.add", "routing.settings"] {
+                    check(tree.contains { $0.name == L10n.text("Account map")
+                            && $0.value == L10n.text("Sending to your backup") },
+                          "\(place): the account map announces the current route")
+                    for control in ["sidebar.routing", "sidebar.openai", "routing.dashboard", "routing.automatic", "shared-usage.add", "routing.settings"] {
                         check(element("window.\(control)", in: tree) != nil,
                               "\(place): dashboard control \(control) is accessible")
                     }
                 }
-                if page.profile == nil && page.selection != ContentView.routingID {
+                if page.selection == ContentView.openAIID {
+                    for (control, title) in [
+                        ("rename", "Rename selected account"), ("slot.first", "Account 1"),
+                        ("slot.second", "Account 2"), ("chat", "Open ChatGPT"), ("codex", "Open Codex…"),
+                        ("usual-browser", "Use my usual browser"),
+                    ] {
+                        let action = element("window.openai.\(control)", in: tree)
+                        let expectedRole = control == "usual-browser" ? "AXLink" : kAXButtonRole as String
+                        check(action?.role == expectedRole && action?.name == OpenAICopy.text(title),
+                              "\(place): \(control) has its own accessible, localized action \(action?.described ?? "missing")")
+                    }
+                }
+                if [ContentView.artifactsID, ContentView.projectsID, ContentView.searchID].contains(page.selection) {
                     // One sign-in for all three: each page heads itself with
                     // the same accounts, each offering to sign in again or out.
                     let scope = page.selection == ContentView.projectsID ? "projects"
@@ -613,10 +630,10 @@ for page in pages {
                 let content = table.map { $0.numberOfRows == 0 ? 0 : $0.rect(ofRow: $0.numberOfRows - 1).maxY }
                     ?? document.frame.height
                 let overflow = content - room(in: scroll)
-                // The dashboard lists every account and its activity; the scroll view is intentional.
-                if page.selection == ContentView.routingID {
+                // Both account pages allow vertical scrolling while keeping controls in reach.
+                if [ContentView.routingID, ContentView.openAIID].contains(page.selection) {
                     check(scroll.bounds.width >= 200 && scroll.bounds.height >= 200,
-                          "\(place): the account and activity list has room to scroll")
+                          "\(place): the account page has room to scroll")
                     continue
                 }
                 check(overflow <= 1, "\(place): fits without scrolling (\(Int(overflow)) points over)")
@@ -650,6 +667,21 @@ func hosted<V: View>(_ view: V, title: String) -> NSWindow {
     window.orderBack(nil)
     settle()
     return window
+}
+
+// Graft's folder is absent in this fixture, as it can be before the relay starts.
+do {
+    let managed = hosted(GraftConnectionView().frame(width: 740, height: 680)
+        .environment(\.controlSurface, ControlSurface.window), title: "Existing Graft connection")
+    let tree = checkAccessibility(managed, surface: ControlSurface.window, "existing Graft connection")
+    check(element("window.routing.manage-graft", in: tree)?.name == L10n.text("Manage in Graft"),
+          "the existing connection offers its own account manager")
+    check(element("window.routing.managed-status", in: tree) != nil
+            && element("window.routing.automatic", in: tree) == nil,
+          "the existing connection displays Graft's switching status without a second switch")
+    check(tree.contains { [$0.name, $0.value].contains(L10n.text("Waiting for Graft")) },
+          "an unavailable Graft relay is shown as disconnected")
+    managed.orderOut(nil)
 }
 
 let dropdown = hosted(MenuBarContent(openMainWindow: {})
@@ -771,6 +803,10 @@ check(element("dropdown.conversation.first-session", in: foldedTree) != nil
       "the conversation in front comes first, and the rest wait behind a count until asked for")
 folded.orderOut(nil)
 
+// A previously configured Graft setup exposes the opt-in without touching Claude.
+let savedGraft = temporary.appending(path: Graft.legacyFolderName)
+try fm.createDirectory(at: savedGraft, withIntermediateDirectories: true)
+try Data(#"{"lenders":{}}"#.utf8).write(to: savedGraft.appending(path: "usage-sharing.json"))
 // Sized by its content, as the Settings scene sizes its window.
 let settingsController = NSHostingController(rootView: SettingsView().environmentObject(Shared.settings))
 let settingsWindow = LayoutWindow(contentViewController: settingsController)
@@ -788,7 +824,7 @@ if let directory = ProcessInfo.processInfo.environment["GRAFT_LAYOUT_WINDOWS"] {
     capture(settingsWindow, as: "\(Bundle.main.preferredLocalizations.first ?? "en")-settings", in: directory)
 }
 let settingsTree = checkAccessibility(settingsWindow, surface: ControlSurface.settings, "Settings")
-check(["open-at-login", "show-in-menu-bar", "front-icon", "front-name", "manual-updates", "download-updates"]
+check(["open-at-login", "show-in-menu-bar", "front-icon", "front-name", "manual-updates", "use-existing-graft", "download-updates"]
         .allSatisfy { element("settings.\($0)", in: settingsTree) != nil },
       "every switch in Settings can be asked for by name, apart from the dropdown's copy of it")
 settingsWindow.orderOut(nil)

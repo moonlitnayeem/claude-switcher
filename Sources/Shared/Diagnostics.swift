@@ -310,7 +310,7 @@ extension Graft {
         let findings = stateFindings(report, login: login)
         var lines: [String] = []
 
-        lines.append("Claude Switcher — state of the chat stores")
+        lines.append("AI Switcher — state of the chat stores")
         lines.append("read \(ISO8601DateFormatter().string(from: Date())) by \(Diagnostics.who)")
         lines.append("")
 

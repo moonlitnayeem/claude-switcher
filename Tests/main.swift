@@ -2942,7 +2942,8 @@ do {
     let delegate = (try? String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .deletingLastPathComponent().appending(path: "Sources/App/ClaudeGraftApp.swift"), encoding: .utf8)) ?? ""
     check(delegate.contains("guard WindowPolicy.hidesDockIcon(")
-            && delegate.contains("menuBarShowing: menuBar?.isShowing == true)\n        else { return }"),
+            && delegate.contains("menuBarShowing: hasMenuItem)")
+            && delegate.contains("return graftMenuBar.isShowing") && delegate.contains("return menuBar?.isShowing == true"),
           "the window closing asks whether the item can be reached before hiding the Dock icon")
     check(delegate.contains("asyncAfter(deadline: .now() + WindowPolicy.placementGrace)")
             && delegate.contains("WindowPolicy.showsWindowAfterHiddenLaunch("),

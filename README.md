@@ -1,40 +1,57 @@
-# Claude Switcher
+# AI Switcher
 
-Claude Switcher is a macOS menu bar app for people who use Claude Code in Claude Desktop with more than one account. Keep working in the same profile and with the same model. When your primary account reaches a usage limit, Switcher can send an eligible request to a backup account you have connected.
+Use one Mac app to see which account answers Claude Code and to open ChatGPT or Codex with the account you choose. Claude Code can switch to a backup automatically when your main account reaches a limit.
 
-[Download Claude Switcher for macOS](https://github.com/moonlitnayeem/claude-switcher/releases/latest) · [Release history](https://github.com/moonlitnayeem/claude-switcher/releases) · [Report a problem](https://github.com/moonlitnayeem/claude-switcher/issues)
+[Download for macOS](https://github.com/moonlitnayeem/claude-switcher/releases/latest) · [All releases](https://github.com/moonlitnayeem/claude-switcher/releases) · [Report a problem](https://github.com/moonlitnayeem/claude-switcher/issues)
 
-![The Routing window showing automatic switching, a primary and a backup account, and the last account to answer. The screenshot uses fictional accounts.](docs/images/switcher-routing.png)
+![AI Switcher’s account map showing a sample Fable 5.2 request trying the backup. Both account names are fictional.](docs/images/switcher-routing.png)
 
-## Get started
+## Install
 
-1. Open the **DMG**, drag **Claude Switcher** to **Applications**, and open it. The app runs on Apple silicon and Intel Macs with macOS 13 or later. Automatic account switching requires macOS 15 or later and Claude Desktop.
-2. Open **Routing** and choose the Claude profile you want to use. Under **Accounts**, choose **Add an Account**. Select another profile you already use, or choose **Sign In to Another Account…**.
-3. Turn on **Automatic switching** for that profile. If Switcher prompts for Keychain access, allow it to use the sign-ins you selected. If the dashboard asks you to reopen the profile, finish any active work and reopen it once so Claude Code picks up the local connection.
-4. Use Claude Code normally. **Routing activity** shows the account and model that answered the last successful request. When a later request fails, its result is shown separately.
+Open the DMG, drag **AI Switcher** to **Applications**, then open it. The app supports Apple silicon and Intel Macs running macOS 13 or later. Automatic switching for Claude Code requires Claude Desktop and macOS 15 or later.
 
-Turn the switch off at any time to use only the profile's own account for new requests. Your backup list and sign-ins are saved for the next time you turn it on.
+## Keep using your Graft setup
 
-## What happens at a limit
+1. Keep Graft running. In **AI Switcher → Settings**, turn on **Use my existing Graft setup**. This option appears when Switcher finds Graft’s saved setup.
+2. Quit and reopen **AI Switcher**. Open **Claude Code** in its sidebar. You’ll see your main account, its backups and the last account that answered. Graft keeps its sign-ins and its existing connection to Claude. This setup requires no changes in Claude.
+3. To add a backup or change an assignment, choose **Manage in Graft**. The map shows Graft’s switching status and refreshes about once a second while open.
 
-Switcher tries the profile's own account first for an ordinary Claude Code inference request. If that account is limited, it tries eligible backups assigned to the profile. A conversation explicitly assigned to an account or tied to an account-owned thread can keep that account. Requests referencing account-owned files, connectors or other resources stay with their owner. Chat and Cowork continue to use their existing accounts.
+A pulse on this map shows a result Graft reported. **Recent activity** shows the account and model from the last reply. If the chat has a saved backup choice in Graft, that backup can answer even before the main account reaches a limit.
 
-Fable can have a separate limit even when the account still has weekly usage available. Switcher tracks the reported Fable reset independently. If the provider has already reset the allowance, choose **Recheck Fable** next to that account. The next eligible Fable request can check it once. Switcher keeps the model you selected. If every eligible account declines the request, Claude shows the provider's limit.
+## Set up Claude Code in AI Switcher
 
-During a relay update, active responses can finish and idle connections reconnect to the new relay. The dashboard shows the last observed request, so you can see what actually happened.
+For a Claude profile with no existing router, open **Claude Code** in the sidebar. Under **Your accounts**, use **Add an Account** to select another signed-in profile or sign in to a backup. Turn on **Automatic switching**. Allow Keychain access if prompted. If Switcher asks you to reopen the Claude profile, finish your work and reopen it once to connect it to Switcher’s local relay.
 
-## If you already use Claude Graft
+During a request, the **Account map** lights up the path to the account Switcher is trying. If the main account reaches its limit, the map can move to the backup. **Recent activity** records which account answered and shows a later error separately. Turn **Automatic switching** off to use only the profile’s own account for new requests. Your backup list is saved.
 
-Switcher has its own settings, application identifier, relay and saved sign-ins. You can open it alongside Graft to explore the dashboard. Each Claude profile can use one router at a time. To try Switcher while Graft is handling ongoing work, use a separate profile that Graft is not routing.
+### When Fable reaches its limit
 
-To move a profile, first finish its active work. In Graft, remove that profile's shared-usage assignments and close the profile once so Graft can restore its connection settings. Graft may forget a backup sign-in when its last assignment is removed. Add that account in Switcher, enable automatic switching for the profile and reopen it. Switcher reports a conflict while Graft still manages the connection.
+Switcher keeps the model you chose, including Fable 5.2. An account can have weekly usage left and still be out of Fable usage. If you’ve reset that account’s allowance and its old reset time is still showing, choose **Recheck Fable** when offered. The next eligible Fable request checks that account once. A successful reply confirms that Fable is available again.
 
-## How the local connection works
+An eligible request can move to another account you’ve connected. Requests tied to an account-owned file, connector or thread can require that account. A saved account choice can also determine which account answers. If all eligible accounts decline Fable, Claude shows the provider’s limit. Claude Chat and Cowork keep using their own accounts.
 
-Automatic switching uses a loopback relay and a local certificate limited to the Anthropic API hostname. The selected profile's Claude Code environment points to that relay. Switcher can forward eligible model requests using a backup's authorization, so use accounts that are yours or that you are authorized to use. Saved sign-ins are stored locally in encrypted form. The app does not install a system-wide proxy.
+## Open ChatGPT or Codex
 
-## Build from source
+1. Choose **ChatGPT & Codex** in the sidebar. Pick **Account 1** or **Account 2**. Use **Rename** to give each one a name you’ll recognize.
+2. For **ChatGPT**, choose **Open ChatGPT**. Switcher opens chatgpt.com in a separate Google Chrome profile for that account. Sign in there the first time. **Use my usual browser** opens ChatGPT in your regular browser, where you can pick the account from ChatGPT’s own menu.
+3. For **Codex**, choose **Open Codex…** and pick a project folder. Apple Terminal starts the Codex command-line app with a separate sign-in for that account. Use the same email you chose for its ChatGPT window. If Codex is missing, use **Get Codex**.
 
-On macOS with the Swift toolchain, run `./build.sh`. The app is written to `build.noindex/Claude Switcher.app`. Use `./test.sh` for app and policy checks, `./test-relay.sh` for loopback routing integration tests, and `./test-layout.sh` for the window and accessibility checks. See `release.sh` for universal builds, signing and notarization.
+Your choice applies to the next window you open. Existing ChatGPT chats and Codex sessions stay with the account that started them.
 
-Claude Switcher is an independent fork of Claude Graft for macOS. The original project was created by Aaditya Vitthal More and released under the MIT license. Claude and Claude Desktop are Anthropic products. [Original project](https://github.com/aaditya-v-more/claude-graft) · [Original website](https://aaditya-v-more.github.io/claude-graft/) · [Creator website](https://aadityamore.com/) · [GitHub](https://github.com/aaditya-v-more) · [LinkedIn](https://www.linkedin.com/in/aadityavmore/) · [MIT license](LICENSE)
+![The ChatGPT and Codex page showing two account choices and a separate launch button for each app.](docs/images/switcher-openai.png)
+
+## Build and check
+
+On macOS with the Swift toolchain, run `./build.sh`. The app is written to `build.noindex/AI Switcher.app`. Run the relevant checks from the repository root.
+
+| Command | What it checks |
+| --- | --- |
+| `./test.sh` | App behavior and account selection rules |
+| `./test-relay.sh` | Requests through a local relay with test accounts |
+| `./test-graft-connection.sh` | Reading an existing Graft setup and queuing a Fable recheck |
+| `./test-openai.sh` | Separate ChatGPT and Codex launch profiles |
+| `./test-layout.sh` | English and Russian windows and accessibility controls |
+
+Release signing and notarization use `release.sh`. See the security guide for where each mode stores its data. [Security guide](SECURITY.md)
+
+AI Switcher is an independent fork of Claude Graft for macOS. The original project was created by Aaditya Vitthal More and released under the MIT license. Claude and Claude Desktop are Anthropic products. ChatGPT and Codex are OpenAI products. [Original project](https://github.com/aaditya-v-more/claude-graft) · [Original website](https://aaditya-v-more.github.io/claude-graft/) · [Creator website](https://aadityamore.com/) · [GitHub](https://github.com/aaditya-v-more) · [LinkedIn](https://www.linkedin.com/in/aadityavmore/) · [MIT license](LICENSE)

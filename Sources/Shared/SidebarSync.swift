@@ -387,7 +387,7 @@ enum SidebarSync {
                                 ("main.js", Data(SidebarStorage.script.utf8))])
         try archive.data.write(to: contents.appending(path: "Resources/app.asar"))
         let info: [String: Any] = ["CFBundleExecutable": "sidebar-storage", "CFBundleName": name,
-            "CFBundleDisplayName": "Claude Switcher Sidebar", "CFBundleIdentifier": "com.moonlitnayeem.claude-switcher.sidebar",
+            "CFBundleDisplayName": "AI Switcher Sidebar", "CFBundleIdentifier": "com.moonlitnayeem.claude-switcher.sidebar",
             "CFBundleVersion": "1", "CFBundlePackageType": "APPL", "NSPrincipalClass": "AtomApplication",
             "LSUIElement": true, "ElectronAsarIntegrity": ["Resources/app.asar": ["algorithm": "SHA256", "hash": archive.hash]]]
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
