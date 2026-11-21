@@ -42,17 +42,22 @@ with socket.socket(socket.AF_UNIX) as server:
 
     # Start with an old helper. Then acknowledge each click except one deliberate failed clear.
     steps = [{}, {}, {}, {'recheckFable': 'backup'}, {},
-             {}, policy(profile), {}, {}, {}, policy('main'), {}, policy(None), {}, policy(None)]
+             {}, policy(profile), {}, {}, {}, policy('main'), {}, policy(None), {}, policy(None), {}, {'recheckFable': profile},
+             {}, {'recheckFable': profile}, {}]
     for index, expected in enumerate(steps):
         if index == 5:
             status['exclusiveAccounts'] = {}
             status['selectableAccounts'] = {'main': ['main', profile]}
+            members.append({**members[1], 'id': profile, 'fableRecheckPending': False,
+                            'limits': {**limits, 'week': 0.99}})
+        if index == len(steps) - 3:
+            members[-1]['fableRecheckPending'] = False
         client, _ = server.accept()
         with client, client.makefile('rb') as reader:
             incoming = json.loads(reader.readline())
             assert incoming == expected, 'unexpected command'
-            if 'recheckFable' in incoming:
-                members[1]['fableRecheckPending'] = True
+            if 'recheckFable' in incoming and index != len(steps) - 2:
+                next(m for m in members if m['id'] == incoming['recheckFable'])['fableRecheckPending'] = True
             if 'accountPolicy' in incoming and index != 12:
                 chosen = incoming['accountPolicy'].get('member')
                 status['exclusiveAccounts'] = {'main': chosen} if chosen else {}

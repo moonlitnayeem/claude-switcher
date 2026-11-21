@@ -22,7 +22,7 @@ struct GraftConnectionView: View {
         let enabled = canSet && snapshot.exclusiveAccount(for: key) == nil
         RoutingPanel(data: display(profile: key), enabled: Binding(get: { enabled },
                      set: { setMode($0 ? nil : key, for: key) }), canSwitch: canSet && !changingMode,
-                     recheck: { member in recheck(member, profile: key) },
+                     refresh: refreshStatus, recheck: { member in recheck(member, profile: key) },
                      useOnly: { setMode($0, for: key) },
                      renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) },
                      launchControls: key == "main" ? ClaudeLaunchControls() : nil) {
@@ -79,7 +79,7 @@ struct GraftConnectionView: View {
         let status = snapshot.status
         let now = Date()
         let rows = accounts.members.map { id -> RoutingAccountDisplay in
-            let report = status?.members.first { $0.id == id }
+            let report = snapshot.report(for: id, from: profile)
             let limits = report?.limits
             let weekIsCurrent = limits.map { ($0.weekReset ?? .distantFuture) > now } ?? false
             let week = weekIsCurrent ? limits.map { Int((min(1, max(0, $0.week)) * 100).rounded(.down)) } : nil
@@ -91,10 +91,12 @@ struct GraftConnectionView: View {
             else { state = "Saved in Graft" }
             var row = RoutingAccountDisplay(id: id, name: name, isPrimary: id == profile,
                                             state: L10n.text(state), weeklyUsed: week)
+            if week != nil { row.weeklyObservation = limits?.observed }
             row.nickname = labels.nickname(for: id)
             row.canSelect = snapshot.canSelectAccount(id, for: profile)
             row.needsAttention = report?.tokenRefused == true || week == 100
             if let reset = limits?.fableRefusedUntil, reset > now { row.fableReset = reset }
+            row.recheckFeedback = snapshot.recheckFeedback(for: id, from: profile)
             row.canRecheck = !rechecking && snapshot.canRecheck(id, from: profile)
             row.recheckPending = report?.fableRecheckPending == true
             return row
@@ -146,11 +148,12 @@ struct GraftConnectionView: View {
         } else {
             data.routingControlHint = L10n.text("Your version of Graft can show activity but can’t change accounts here.")
         }
+        data.readRecentLimits(history)
         if let last = history.last {
             let ok = (200..<300).contains(last.status)
             data.route = RouteMapSignal(phase: ok ? .answered : .failed, backup: accounts.canonical(last.servedBy) != profile,
                                         model: last.model.map(RoutingDashboard.modelName), at: last.at)
-            if !ok { data.latestFailure = L10n.format("Request returned HTTP %ld", last.status) }
+            if !ok && !data.showsRateLimit(for: last) { data.latestFailure = L10n.format("Request returned HTTP %ld", last.status) }
         }
         return data
     }
@@ -176,6 +179,18 @@ struct GraftConnectionView: View {
         }
     }
 
+    @MainActor
+    private func refreshStatus() async -> Bool {
+        let revision = modeRevision
+        let fresh = await Task.detached(priority: .userInitiated) { connection.read() }.value
+        if revision == modeRevision && !changingMode {
+            modeRevision += 1
+            snapshot = fresh
+            loaded = true
+        }
+        return fresh.status != nil
+    }
+
     private func recheck(_ member: String, profile: String) {
         guard !rechecking else { return }
         rechecking = true
@@ -183,8 +198,12 @@ struct GraftConnectionView: View {
             let queued = await Task.detached(priority: .utility) {
                 (try? connection.recheck(member, from: profile)) == true
             }.value
+            _ = await refreshStatus()
             rechecking = false
-            if !queued { message = L10n.text("Graft could not queue that check. Refresh the account in Graft.") }
+            if !queued {
+                message = snapshot.recheckFeedback(for: member, from: profile, declined: true)
+                    ?? L10n.text("The relay could not queue this Fable check. Refresh to see the latest account status.")
+            }
         }
     }
 

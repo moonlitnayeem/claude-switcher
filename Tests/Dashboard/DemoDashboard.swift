@@ -35,7 +35,7 @@ struct DemoDashboard: View {
             lastAnswered: empty ? nil : Date(timeIntervalSince1970: 1_783_348_200), route: route,
             exclusiveAccount: exclusiveAccount)
         RoutingPanel(data: snapshot, enabled: Binding(get: { enabled }, set: { exclusiveAccount = $0 ? nil : primary.id }),
-                     canSwitch: true, recheck: { _ in queued = true }, useOnly: { exclusiveAccount = $0 },
+                     canSwitch: true, refresh: { true }, recheck: { _ in queued = true }, useOnly: { exclusiveAccount = $0 },
                      removeBackup: { id in
                          removed = true
                          if exclusiveAccount == id { exclusiveAccount = nil }

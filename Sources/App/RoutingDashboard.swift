@@ -9,7 +9,9 @@ struct RoutingAccountDisplay: Identifiable {
     var state: String
     var needsAttention = false
     var weeklyUsed: Int?
+    var weeklyObservation: Date?
     var fableReset: Date?
+    var recheckFeedback: String?
     var canRecheck = false
     var recheckPending = false
     var nickname: String? = nil
@@ -25,11 +27,29 @@ struct RoutingDisplay {
     var lastModel: String?
     var lastAnswered: Date?
     var latestFailure: String?
+    var recentModelLimits: [RoutingModelLimit] = []
     var route: RouteMapSignal?
     var externallyManaged = false
     var exclusiveAccount: String?
     var routingControlHint: String?
     var savedChoiceUnreadable = false
+}
+
+struct RoutingModelLimit: Identifiable {
+    let id: String
+    let at: Date
+}
+
+extension RoutingDisplay {
+    mutating func readRecentLimits(_ history: [PoolRouting]) {
+        recentModelLimits = PoolRouting.latestModelRateLimits(in: history).compactMap { event in
+            event.model.map { RoutingModelLimit(id: $0, at: event.at) }
+        }
+    }
+
+    func showsRateLimit(for event: PoolRouting) -> Bool {
+        recentModelLimits.contains { $0.id == event.model && $0.at == event.at }
+    }
 }
 
 extension PoolStatus {
@@ -57,7 +77,9 @@ struct RoutingDashboard: View {
         RoutingPanel(data: display(for: key), enabled: Binding(
             get: { pool.canSetRoutingMode(for: key) && pool.exclusiveAccount(for: key) == nil && pool.automaticSwitchingEnabled(for: key) },
             set: { setMode($0 ? nil : key, for: key) }
-        ), canSwitch: pool.canSetRoutingMode(for: key) && !changingMode, recheck: pool.recheckFable,
+        ), canSwitch: pool.canSetRoutingMode(for: key) && !changingMode, refresh: {
+            await pool.refreshRelayStatus()
+        }, recheck: pool.recheckFable,
                      useOnly: { setMode($0, for: key) },
                      removeBackup: { pool.removeDisplayedBackup($0, from: key) },
                      renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) },
@@ -138,7 +160,8 @@ struct RoutingDashboard: View {
             result.route = RouteMapSignal(phase: (200..<300).contains(recent.status) ? .answered : .failed,
                                           backup: !pool.sameIdentity(recent.servedBy, key), model: recent.model.map(Self.modelName), at: recent.at)
         }
-        if let failed = history.last, !(200..<300).contains(failed.status) {
+        result.readRecentLimits(history)
+        if let failed = history.last, !(200..<300).contains(failed.status), !result.showsRateLimit(for: failed) {
             let model = failed.model.map(Self.modelName) ?? "Claude Code"
             result.latestFailure = failed.status == 429
                 ? L10n.format("%@ reached a limit on the latest request.", model)
@@ -196,6 +219,7 @@ struct RoutingDashboard: View {
         }
         var row = RoutingAccountDisplay(id: id, name: name(id), isPrimary: id == primary,
                                          state: "Checking login", weeklyUsed: week)
+        if live?.week == nil, week != nil { row.weeklyObservation = limits?.observed }
         if report?.tokenRefused == true || pool.lending[id] == .expired {
             row.state = "Sign in again"
             row.needsAttention = true
@@ -229,7 +253,7 @@ struct RoutingDashboard: View {
 
     static func modelName(_ id: String) -> String {
         let parts = id.split(separator: "-").map(String.init)
-        guard parts.count >= 3, parts[0] == "claude", ["fable","opus","sonnet","haiku"].contains(parts[1]),
+        guard parts.count >= 3, parts[0] == "claude", ["fable", "mythos", "opus", "sonnet", "haiku"].contains(parts[1]),
               Int(parts[2]) != nil else { return id }
         let version = parts.dropFirst(2).prefix { $0.count <= 2 && Int($0) != nil }
         guard !version.isEmpty else { return id }
@@ -262,6 +286,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     let data: RoutingDisplay
     @Binding var enabled: Bool
     let canSwitch: Bool
+    let refresh: () async -> Bool
     let recheck: (String) -> Void
     let useOnly: (String) -> Void
     var removeBackup: ((String) -> Void)? = nil
@@ -271,6 +296,8 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     @ViewBuilder let accountActions: () -> AccountActions
     @ViewBuilder let manage: () -> Manage
     @Environment(\.colorScheme) private var scheme
+    @State private var refreshing = false
+    @State private var refreshResult: String?
 
     private var canvas: Color {
         scheme == .dark ? Color(red: 0.065, green: 0.078, blue: 0.103) : Color(red: 0.955, green: 0.964, blue: 0.975)
@@ -311,7 +338,26 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                         HStack {
                             heading("Your accounts")
                             Spacer(minLength: 4)
+                            Button {
+                                guard !refreshing else { return }
+                                refreshing = true
+                                Task { @MainActor in
+                                    let received = await refresh()
+                                    refreshResult = received
+                                        ? L10n.format("Relay status refreshed at %@.", Date().formatted(date: .omitted, time: .standard))
+                                        : L10n.text("Couldn’t refresh the relay status. Check the connection and try again.")
+                                    refreshing = false
+                                }
+                            } label: {
+                                Label(refreshing ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
+                            }
+                            .disabled(refreshing).identified("routing.refresh")
+                            .help("Read the latest account status from the relay. Use Recheck Fable after resetting its limit.")
                             accountActions().tint(accent)
+                        }
+                        if let refreshResult {
+                            Text(refreshResult).font(.caption).foregroundStyle(.secondary)
+                                .identified("routing.refresh-result")
                         }
                         Text(data.routingControlHint ?? L10n.text("These controls apply to new Claude Code requests in this profile."))
                             .font(.callout).foregroundStyle(.secondary)
@@ -371,9 +417,17 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                     Text(item.state).foregroundStyle(item.needsAttention ? Color.primary : .secondary)
                 }.font(.caption).foregroundStyle(.secondary)
                 if compact { weekly(item) }
+                if let observed = item.weeklyObservation {
+                    Text(L10n.format("Weekly usage last seen %@", observed.formatted(date: .abbreviated, time: .shortened)))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let feedback = item.recheckFeedback {
+                    Text(feedback).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let reset = item.fableReset {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.format("Fable resets %@", reset.formatted(date: .abbreviated, time: .shortened)))
+                        Text(L10n.format("Saved Fable reset time · %@", reset.formatted(date: .abbreviated, time: .shortened)))
                             .font(.caption).foregroundStyle(.secondary)
                         if item.recheckPending {
                             Text("Recheck queued for next Fable request").font(.caption).foregroundStyle(accent)
@@ -453,6 +507,14 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if data.lastAnswered != nil { Divider() }
             }
+            ForEach(data.recentModelLimits) { limit in
+                Label(L10n.format("%@ hit a limit on its last request · %@",
+                                  RoutingDashboard.modelName(limit.id),
+                                  limit.at.formatted(date: .abbreviated, time: .shortened)),
+                      systemImage: "exclamationmark.circle")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            if !data.recentModelLimits.isEmpty && data.lastAnswered != nil { Divider() }
             if let at = data.lastAnswered, let name = data.lastAccount {
                 HStack(spacing: 9) {
                     Image(systemName: "checkmark.circle").foregroundStyle(accent).accessibilityHidden(true)

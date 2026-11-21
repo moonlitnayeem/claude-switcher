@@ -532,6 +532,21 @@ struct PoolRouting: Codable, Equatable {
     var passedOver: [PoolPass]
     var model: String?
     var session: String?
+
+    /// A newer result supersedes a limit for the same model. The caller supplies
+    /// only this profile's history; a different profile can have a different result.
+    static func latestModelRateLimits(in history: [PoolRouting]) -> [PoolRouting] {
+        let newestFirst = history.enumerated().sorted { left, right in
+            if left.element.at == right.element.at { return left.offset > right.offset }
+            return left.element.at > right.element.at
+        }
+        var seen = Set<String>()
+        return newestFirst.compactMap { _, route in
+            guard let model = route.model?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !model.isEmpty, seen.insert(model).inserted, route.status == 429 else { return nil }
+            return route
+        }
+    }
 }
 
 /// A conversation the relay has carried, by Claude Code's session id.

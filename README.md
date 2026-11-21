@@ -39,9 +39,15 @@ For a profile already connected directly to AI Switcher, the **Account map** and
 
 On the main Claude profile, open **More → Open Claude Code in Terminal…** and pick a local project folder. The Claude CLI uses its regular Terminal sign-in and settings. The account map follows Claude Desktop’s connection. Opening Terminal leaves that connection in place.
 
+### Check a model’s latest limit
+
+Open **Claude Desktop → Your accounts → Refresh**. The time beneath the button tells you when AI Switcher last read the relay. Each dated weekly reading tells you when that account’s usage was last seen. An account reset can be newer than its reading. Refresh reads the local status without sending a model request.
+
+Under **Recent activity**, a model is listed if its latest recorded request returned a rate limit. A later reply from a different model leaves that entry visible. A newer result for the same model updates it. The list covers the recent requests the relay still has for this profile, including Fable, Mythos and other named models.
+
 ### When Fable reaches its limit
 
-Switcher keeps the model you chose, including Fable 5.2. An account can have weekly usage left and still be out of Fable usage. If you’ve reset that account’s allowance and its old reset time is still showing, choose **Recheck Fable** when offered. The next eligible Fable request checks that account once. A successful reply confirms that Fable is available again.
+Switcher keeps the model you chose, including Fable 5.2. An account can have weekly usage left and still be out of Fable usage. If you’ve reset that account’s allowance and its old reset time is still showing, choose **Recheck Fable** when offered. The next eligible Fable request checks that account once. Check for the queued confirmation. Some Graft versions skip the check at 99% overall weekly use or 98% overall five-hour use, even when Fable’s own allowance has been reset. In that case, AI Switcher shows what the relay reported. A Fable reply from the backup confirms that the account handled the request.
 
 An eligible request can move to another account you’ve connected. Requests tied to an account-owned file, connector or thread can require that account. A saved account choice can also determine which account answers. If all eligible accounts decline Fable, Claude shows the provider’s limit. Claude Chat and Cowork keep using their own accounts.
 

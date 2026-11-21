@@ -88,10 +88,38 @@ struct GraftConnection {
             return ids.lazy.filter { accountUUIDs[$0] == uuid }.compactMap { accountLabels[$0] }.first
         }
 
+        func report(for member: String, from profile: String) -> PoolMemberStatus? {
+            let handle = selectableMember(member, for: profile) ?? member
+            return status?.members.first { $0.id == handle }
+        }
+
+        /// Older Graft helpers report the usage readings but give no reason for declining a recheck.
+        func recheckFeedback(for member: String, from profile: String, declined: Bool = false, now: Date = Date()) -> String? {
+            guard let status, status.configured, status.enabled, member != profile,
+                  accounts(for: profile).members.dropFirst().contains(member),
+                  let report = report(for: member, from: profile), !report.tokenRefused,
+                  report.fableRecheckPending != true, let limits = report.limits else { return nil }
+            if !PoolPolicy.hasRoom(limits, now: now) {
+                return L10n.text("Graft reports an account-wide limit. Each model can also have its own limit.")
+            }
+            if limits.week >= PoolPolicy.weekCeiling, (limits.weekReset ?? .distantFuture) > now {
+                return L10n.text(declined
+                    ? "Graft may skip a check when overall weekly use reaches 99%. Fable has a separate allowance."
+                    : "At least 99% of this account’s weekly usage is spent. Each model can also have its own limit.")
+            }
+            if limits.fiveHour >= PoolPolicy.fiveHourCeiling, (limits.fiveHourReset ?? .distantFuture) > now {
+                return L10n.text(declined
+                    ? "Graft may skip a check when overall five-hour use reaches 98%. Fable has a separate allowance."
+                    : "At least 98% of this account’s five-hour usage is spent. Each model can also have its own limit.")
+            }
+            return nil
+        }
+
         func canRecheck(_ member: String, from profile: String, now: Date = Date()) -> Bool {
             guard let status, status.configured, status.enabled, member != profile,
                   accounts(for: profile).members.dropFirst().contains(member),
-                  let report = status.members.first(where: { $0.id == member }),
+                  status.selectableAccounts == nil || selectableMember(member, for: profile) != nil,
+                  let report = report(for: member, from: profile),
                   !report.tokenRefused, report.fableRecheckPending != true,
                   let limits = report.limits, let until = limits.fableRefusedUntil, until > now
             else { return false }
@@ -141,9 +169,11 @@ struct GraftConnection {
     }
 
     func recheck(_ member: String, from profile: String) throws -> Bool {
-        guard read().canRecheck(member, from: profile) else { return false }
-        let updated = try send(PoolCommand(recheckFable: member))
-        return updated.members.first(where: { $0.id == member })?.fableRecheckPending == true
+        let snapshot = read()
+        guard snapshot.canRecheck(member, from: profile),
+              let report = snapshot.report(for: member, from: profile) else { return false }
+        let updated = try send(PoolCommand(recheckFable: report.id))
+        return updated.members.first(where: { $0.id == report.id })?.fableRecheckPending == true
     }
 
     func setExclusiveAccount(_ member: String?, for profile: String) throws -> Snapshot {

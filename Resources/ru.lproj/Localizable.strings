@@ -723,3 +723,16 @@
 "Account controls are unavailable for this connection." = "В этом подключении выбор аккаунта недоступен.";
 "This account is no longer on the list for this profile." = "Этого аккаунта больше нет в списке аккаунтов профиля.";
 "The connection could not confirm your account choice. Check the current setting and try again." = "Сервис не подтвердил выбор аккаунта. Проверьте текущую настройку и попробуйте снова.";
+"Graft reports an account-wide limit. Each model can also have its own limit." = "По данным Graft, достигнут общий лимит аккаунта. У каждой модели также может быть свой лимит.";
+"Graft may skip a check when overall weekly use reaches 99%. Fable has a separate allowance." = "Graft может пропустить проверку, когда израсходовано 99% общего недельного лимита. У Fable отдельный лимит.";
+"Graft may skip a check when overall five-hour use reaches 98%. Fable has a separate allowance." = "Graft может пропустить проверку, когда израсходовано 98% общего пятичасового лимита. У Fable отдельный лимит.";
+"At least 99% of this account’s weekly usage is spent. Each model can also have its own limit." = "Израсходовано не менее 99% недельного лимита аккаунта. У каждой модели также может быть свой лимит.";
+"At least 98% of this account’s five-hour usage is spent. Each model can also have its own limit." = "Израсходовано не менее 98% пятичасового лимита аккаунта. У каждой модели также может быть свой лимит.";
+"Refresh" = "Обновить";
+"Relay status refreshed at %@." = "Статус маршрутизации обновлён в %@.";
+"Couldn’t refresh the relay status. Check the connection and try again." = "Не удалось обновить статус. Проверьте соединение и попробуйте снова.";
+"Read the latest account status from the relay. Use Recheck Fable after resetting its limit." = "Прочитать текущий статус аккаунтов. После сброса лимита нажмите «Перепроверить Fable».";
+"The relay could not queue this Fable check. Refresh to see the latest account status." = "Не удалось запланировать проверку Fable. Обновите статус аккаунта.";
+"%@ hit a limit on its last request · %@" = "Лимит для %@ достигнут при последнем запросе · %@";
+"Saved Fable reset time · %@" = "Сохранённое время сброса лимита Fable · %@";
+"Weekly usage last seen %@" = "Последние данные о расходе за неделю получены %@";

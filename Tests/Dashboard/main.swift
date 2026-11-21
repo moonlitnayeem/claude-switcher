@@ -122,6 +122,7 @@ let answered = RouteMapSignal(phase: .answered, backup: true, model: nil, at: ti
 precondition(OrbitFrame(at: tick.addingTimeInterval(8), moving: true, signal: answered, traceBegan: nil).pulse == nil)
 
 precondition(RoutingDashboard.modelName("claude-fable-5-2") == "Fable 5.2")
+precondition(RoutingDashboard.modelName("claude-mythos-5-2") == "Mythos 5.2")
 precondition(RoutingDashboard.modelName("custom-model") == "custom-model")
 try MainActor.assumeIsolated {
     try capture("routing-light", dark: false, compact: false)

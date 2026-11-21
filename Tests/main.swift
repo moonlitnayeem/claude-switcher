@@ -5851,6 +5851,21 @@ do {
           "an answer that never reached the model teaches nothing about the account")
     check(PoolLimits.parse([("Anthropic-RateLimit-Unified-5h-Utilization", "0.5")], now: now)?.fiveHour == 0.5,
           "header names are matched whatever their case")
+    func completed(_ model: String?, _ second: TimeInterval, _ status: Int) -> PoolRouting {
+        PoolRouting(at: now.addingTimeInterval(second), from: "main", servedBy: "main", status: status,
+                    passedOver: [], model: model)
+    }
+    let fableLimit = completed("fable", 2, 429)
+    let newModelLimit = completed("future-model", 3, 429)
+    let history = [newModelLimit, fableLimit, completed("haiku", 4, 200),
+                   completed("fable", 1, 200), completed(nil, 6, 429), completed("  ", 7, 429)]
+    check(PoolRouting.latestModelRateLimits(in: history) == [newModelLimit, fableLimit],
+          "recent limits appear newest first for every named model even after another model answers")
+    check(PoolRouting.latestModelRateLimits(in: history + [completed("fable", 5, 200)]) == [newModelLimit],
+          "a later reply removes the previous limit for that model")
+    check(PoolRouting.latestModelRateLimits(in: history + [completed("future-model", 3, 503)]) == [fableLimit],
+          "at the same timestamp the later completion supersedes the previous result")
+
     let percent = PoolLimits(fiveHourPercent: 34, fiveHourReset: nil, weekPercent: 71, weekReset: nil, observed: now)
     check(abs(percent.fiveHour - 0.34) < 1e-9 && abs(percent.week - 0.71) < 1e-9,
           "the usage endpoint's percentages become the same fractions")

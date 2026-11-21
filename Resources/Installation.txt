@@ -11,6 +11,8 @@ A compatible helper shows “Automatic switching” by the account map.
 Turn it off for the main account only, or choose “Use only this account”
 beside a backup. Turning it on again restores the usual routing.
 Use “Manage in Graft” to add or remove a backup.
+Choose “Refresh” in Your accounts to read the latest relay status.
+Recent activity shows which models hit a limit on their latest request.
 Claude keeps using its saved connection.
 
 New to AI Switcher?

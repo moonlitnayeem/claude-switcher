@@ -61,6 +61,32 @@ precondition(automatic.exclusiveAccount(for: "main") == nil && automatic.canSetR
 precondition(automatic.accounts(for: "main").members == main.members)
 print("Account controls require a compatible helper, a configured account and the requested mode in its reply")
 
+precondition(automatic.report(for: "backup", from: "main")?.id == studio)
+precondition(automatic.canRecheck("backup", from: "main"))
+let aliasRechecked = try connection.recheck("backup", from: "main")
+precondition(aliasRechecked)
+print("Rechecking a reset at 99% weekly use targets the active handle for the displayed backup.")
+
+let refusedRecheck = try connection.recheck("backup", from: "main")
+precondition(!refusedRecheck)
+let declined = connection.read()
+precondition(declined.recheckFeedback(for: "backup", from: "main", declined: true)?.contains("may skip a check") == true)
+precondition(declined.recheckFeedback(for: "backup", from: "main")?.contains("At least 99%") == true)
+precondition(declined.recheckFeedback(for: "backup", from: "foreign") == nil)
+let nextWeek = Date().addingTimeInterval(7 * 24 * 60 * 60)
+precondition(declined.recheckFeedback(for: "backup", from: "main", now: nextWeek) == nil)
+precondition(snapshot.recheckFeedback(for: "backup", from: "main") == nil)
+var shortWindow = declined
+let active = shortWindow.status!.members.firstIndex { $0.id == studio }!
+shortWindow.status?.members[active].limits?.week = 0.2
+shortWindow.status?.members[active].limits?.fiveHour = 0.98
+shortWindow.status?.members[active].limits?.fiveHourReset = Date().addingTimeInterval(3600)
+shortWindow.status?.members[active].limits?.fableRefusedUntil = nil
+precondition(shortWindow.recheckFeedback(for: "backup", from: "main")?.contains("98%") == true)
+shortWindow.status?.members[active].limits?.fiveHour = 1
+precondition(shortWindow.recheckFeedback(for: "backup", from: "main")?.contains("account-wide limit") == true)
+print("The dashboard distinguishes five-hour and weekly usage, an account-wide limit and a declined reset check.")
+
 let disconnected = GraftConnection(root: root.appending(path: "absent"))
 precondition(disconnected.read().status == nil && !disconnected.read().settingsFound)
 precondition(!FileManager.default.fileExists(atPath: disconnected.root.path))

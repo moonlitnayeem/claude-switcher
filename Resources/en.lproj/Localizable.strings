@@ -723,3 +723,16 @@
 "Account controls are unavailable for this connection." = "Account controls are unavailable for this connection.";
 "This account is no longer on the list for this profile." = "This account is no longer on the list for this profile.";
 "The connection could not confirm your account choice. Check the current setting and try again." = "The connection could not confirm your account choice. Check the current setting and try again.";
+"Graft reports an account-wide limit. Each model can also have its own limit." = "Graft reports an account-wide limit. Each model can also have its own limit.";
+"Graft may skip a check when overall weekly use reaches 99%. Fable has a separate allowance." = "Graft may skip a check when overall weekly use reaches 99%. Fable has a separate allowance.";
+"Graft may skip a check when overall five-hour use reaches 98%. Fable has a separate allowance." = "Graft may skip a check when overall five-hour use reaches 98%. Fable has a separate allowance.";
+"At least 99% of this account’s weekly usage is spent. Each model can also have its own limit." = "At least 99% of this account’s weekly usage is spent. Each model can also have its own limit.";
+"At least 98% of this account’s five-hour usage is spent. Each model can also have its own limit." = "At least 98% of this account’s five-hour usage is spent. Each model can also have its own limit.";
+"Refresh" = "Refresh";
+"Relay status refreshed at %@." = "Relay status refreshed at %@.";
+"Couldn’t refresh the relay status. Check the connection and try again." = "Couldn’t refresh the relay status. Check the connection and try again.";
+"Read the latest account status from the relay. Use Recheck Fable after resetting its limit." = "Read the latest account status from the relay. Use Recheck Fable after resetting its limit.";
+"The relay could not queue this Fable check. Refresh to see the latest account status." = "The relay could not queue this Fable check. Refresh to see the latest account status.";
+"%@ hit a limit on its last request · %@" = "%@ hit a limit on its last request · %@";
+"Saved Fable reset time · %@" = "Saved Fable reset time · %@";
+"Weekly usage last seen %@" = "Weekly usage last seen %@";

@@ -334,6 +334,18 @@ final class UsagePoolController: ObservableObject {
         storeWatch.watch(sharing ? claudes.compactMap(profile(of:)).map(Self.recordStore(of:)) : [])
     }
 
+    @MainActor
+    func refreshRelayStatus() async -> Bool {
+        let result: PoolStatus? = await withCheckedContinuation { continuation in
+            queue.async {
+                let status = try? PoolSocket.send(PoolCommand())
+                DispatchQueue.main.async { continuation.resume(returning: status) }
+            }
+        }
+        status = result
+        return result != nil
+    }
+
     private func peekAgainIfAsked() {
         guard peekAgain else { return }
         peekAgain = false

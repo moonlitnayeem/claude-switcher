@@ -474,6 +474,12 @@ for page in pages {
                     if state == "current" && appearance == .aqua {
                         let id = "window.routing.automatic"
                         let initial = element(id, in: tree)?.value
+                        _ = readFromOutside(window, pressRoutingFixture: "window.routing.refresh")
+                        settle()
+                        let refreshed = seen(window) ?? []
+                        check(element("window.routing.refresh-result", in: refreshed) != nil
+                              && element(id, in: refreshed)?.value == initial,
+                              "\(place): refreshing reads the relay and keeps the selected routing mode")
                         let backup = "window.routing.only.studio"
                         let main = "window.routing.only.personal"
                         _ = readFromOutside(window, pressRoutingFixture: backup)
@@ -777,6 +783,12 @@ do {
             && element("window.routing.only.main", in: tree)?.enabled == false
             && element("window.routing.only.studio", in: tree)?.enabled == false,
           "the existing connection displays controls but cannot change accounts while disconnected")
+    check(element("window.routing.refresh", in: tree)?.enabled == true,
+          "the refresh button remains available while the relay is disconnected")
+    _ = readFromOutside(managed, pressRoutingFixture: "window.routing.refresh")
+    settle()
+    check((seen(managed) ?? []).contains { [$0.name, $0.value].contains(L10n.text("Couldn’t refresh the relay status. Check the connection and try again.")) },
+          "a disconnected refresh explains that a relay read failed")
     check(tree.contains { [$0.name, $0.value].contains(L10n.text("Waiting for Graft")) },
           "an unavailable Graft relay is shown as disconnected")
     check(element("window.routing.rename.main", in: tree)?.role == kAXButtonRole
