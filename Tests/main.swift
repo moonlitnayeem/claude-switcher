@@ -5933,6 +5933,13 @@ do {
                              borrowed: false, now: now) == .exhausted(until: now + hour),
           "or until the reset it named")
     let fable = "claude-fable-5-2"
+    let fableLive = PoolLimits.parse([
+        (prefix + "5h-utilization", "0.16"), (prefix + "7d-utilization", "0.05"),
+        (prefix + "7d_oi-utilization", "0.09"), (prefix + "7d_oi-reset", stamp(4 * day)),
+        (prefix + "status", "allowed"),
+    ], now: now, model: fable)
+    check(fableLive?.fable == 0.09 && fableLive?.fableReset == now + 4 * day && fableLive?.fableObserved == now,
+          "a Fable answer's 7d_oi utilization header is captured for live usage display")
     let scopedHeaders = [(prefix + "status", "rejected"), (prefix + "7d_oi-status", "rejected"),
                          (prefix + "7d_oi-reset", stamp(hour)), (prefix + "reset", stamp(day))]
     let fableHold = PoolLimits.parse(scopedHeaders, now: now, model: fable)

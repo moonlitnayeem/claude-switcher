@@ -210,7 +210,9 @@ struct GraftConnectionView: View {
             let observed = ClaudeUsageDisplay.graftReadings(at: connection.root.appending(path: "usage-status.json"), now: now)
             let readings = Dictionary(uniqueKeysWithValues: Set(next.accountUUIDs.values).map { account in
                 let relayWeekly = Self.relayWeeklyMetric(for: account, in: next, now: now)
+                let relayFable = Self.relayFableMetric(for: account, in: next, now: now)
                 return (account, ClaudeUsageDisplay.load(account: account, relayWeekly: relayWeekly,
+                                                         relayFable: relayFable,
                                                          graftReading: observed[account], now: now))
             })
             return (next, readings)
@@ -227,6 +229,23 @@ struct GraftConnectionView: View {
             let percent = Int((limits.week * 100).rounded())
             guard (0...100).contains(percent) else { continue }
             let candidate = ClaudeUsageDisplay.Metric(percent: percent, observedAt: limits.observed, source: .relay)
+            if freshest == nil || candidate.observedAt > freshest!.observedAt { freshest = candidate }
+        }
+        return freshest
+    }
+
+    nonisolated private static func relayFableMetric(for account: UUID, in snapshot: GraftConnection.Snapshot,
+                                                     now: Date) -> ClaudeUsageDisplay.Metric? {
+        guard let members = snapshot.status?.members else { return nil }
+        let matchingIDs = Set(snapshot.accountUUIDs.compactMap { $0.value == account ? $0.key : nil })
+        var freshest: ClaudeUsageDisplay.Metric?
+        for report in members where matchingIDs.contains(report.id) {
+            guard let limits = report.limits, let fable = limits.fable,
+                  (limits.fableReset ?? limits.weekReset ?? .distantFuture) > now else { continue }
+            let percent = Int((fable * 100).rounded())
+            guard (0...100).contains(percent) else { continue }
+            let observedAt = limits.fableObserved ?? limits.observed
+            let candidate = ClaudeUsageDisplay.Metric(percent: percent, observedAt: observedAt, source: .relay)
             if freshest == nil || candidate.observedAt > freshest!.observedAt { freshest = candidate }
         }
         return freshest

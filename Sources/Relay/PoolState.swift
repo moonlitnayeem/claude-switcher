@@ -189,6 +189,12 @@ actor PoolState {
             // account is in use, and a poll is fresher once it has gone quiet.
             let key = member.account ?? member.id
             if var pushed = member.limits, pushed.observed > (limits[key]?.observed ?? .distantPast) {
+                if pushed.fable == nil, let existing = limits[key],
+                   (existing.fableReset ?? .distantFuture) > now {
+                    pushed.fable = existing.fable
+                    pushed.fableReset = pushed.fableReset ?? existing.fableReset
+                    pushed.fableObserved = existing.fableObserved
+                }
                 preserveCooldowns(in: &pushed, from: limits[key], now: now)
                 limits[key] = pushed
             }
@@ -483,6 +489,14 @@ actor PoolState {
                 if !names.contains("anthropic-ratelimit-unified-7d-utilization") {
                     parsed.week = previous.week
                     parsed.weekReset = parsed.weekReset ?? previous.weekReset
+                }
+                if parsed.fable == nil,
+                   let previousFable = previous.fable,
+                   (previous.fableReset ?? .distantFuture) > now,
+                   !(succeeded && PoolRequest.usesIncludedAllowance(model) && previousFable >= 1) {
+                    parsed.fable = previousFable
+                    parsed.fableReset = parsed.fableReset ?? previous.fableReset
+                    parsed.fableObserved = previous.fableObserved
                 }
             }
             preserveCooldowns(in: &parsed, from: previous, now: now,

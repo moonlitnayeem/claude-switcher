@@ -95,6 +95,9 @@ class Service(http.server.BaseHTTPRequestHandler):
         if state.get("5h") is not None:
             limits["anthropic-ratelimit-unified-5h-utilization"] = str(state["5h"])
             limits["anthropic-ratelimit-unified-5h-reset"] = str(int(now + 3600))
+        if state.get("7d_oi") is not None:
+            limits["anthropic-ratelimit-unified-7d_oi-utilization"] = str(state["7d_oi"])
+            limits["anthropic-ratelimit-unified-7d_oi-reset"] = str(int(state["7d-reset"]))
         model_rejection = None
         if state.get("model_rejections"):
             model_rejection = state["model_rejections"].get(json.loads(body)["model"])
@@ -810,7 +813,7 @@ for label, model_name, main_rejection, thread_id in [
     m_id, b_id = "auto-main-" + thread_id, "auto-backup-" + thread_id
     m_tok, b_tok = "tok-" + m_id, "tok-" + b_id
     accounts[m_tok] = {"5h": 0.0, "7d": 0.68, "7d-reset": now + 6 * 86400, "reject": False}
-    accounts[b_tok] = {"5h": 0.0, "7d": 0.0, "7d-reset": now + 4 * 86400, "reject": False}
+    accounts[b_tok] = {"5h": 0.0, "7d": 0.05, "7d_oi": 0.09, "7d-reset": now + 4 * 86400, "reject": False}
     stale_limits = {
         "fiveHour": 0.03,
         "fiveHourReset": (now - 3600) - 978307200,
@@ -851,9 +854,10 @@ for label, model_name, main_rejection, thread_id in [
     response, _, went = ask(conn, m_tok, session=None, body=opus_body)
     check(response.status == 200 and [w["token"] for w in went] == [m_tok],
           label + " limit on main leaves Opus on main untouched")
-    # Backup's cached limits are now refreshed to 0% with no stale Fable refusal.
+    # Backup's cached limits are now refreshed to 5% weekly and 9% Fable with no stale Fable refusal.
     backup_state = next(row for row in control({})["members"] if row["id"] == b_id)
-    check(backup_state["limits"]["week"] == 0.0 and backup_state["limits"].get("fableRefusedUntil") is None,
+    check(backup_state["limits"]["week"] == 0.05 and backup_state["limits"].get("fable") == 0.09
+          and backup_state["limits"].get("fableRefusedUntil") is None,
           label + " backup answer refreshes its cached weekly and Fable limits")
 
 # A stale backup that is genuinely still exhausted is probed once, then left alone.

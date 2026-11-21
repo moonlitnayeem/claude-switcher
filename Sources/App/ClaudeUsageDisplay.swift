@@ -120,8 +120,8 @@ enum ClaudeUsageDisplay {
         return result
     }
 
-    static func load(account: UUID, relayWeekly: Metric? = nil, graftReading: Reading? = nil,
-                     now: Date = Date()) -> Reading {
+    static func load(account: UUID, relayWeekly: Metric? = nil, relayFable: Metric? = nil,
+                     graftReading: Reading? = nil, now: Date = Date()) -> Reading {
         let stored = try? saved(for: account)
         func page(_ metric: Metric?) -> Metric? {
             metric.flatMap { $0.source.isPageReading && $0.isCurrent(at: now) ? $0 : nil }
@@ -129,10 +129,11 @@ enum ClaudeUsageDisplay {
         func graft(_ metric: Metric?) -> Metric? {
             metric.flatMap { $0.source == .graftUsage && $0.isCurrent(at: now) ? $0 : nil }
         }
-        let relay = relayWeekly.flatMap { $0.source == .relay && $0.isCurrent(at: now) ? $0 : nil }
+        let relayW = relayWeekly.flatMap { $0.source == .relay && $0.isCurrent(at: now) ? $0 : nil }
+        let relayF = relayFable.flatMap { $0.source == .relay && $0.isCurrent(at: now) ? $0 : nil }
         let weekly = newer(page(stored?.weekly), graft(graftReading?.weekly))
         let fable = newer(page(stored?.fable), graft(graftReading?.fable))
-        return Reading(weekly: newer(weekly, relay), fable: fable)
+        return Reading(weekly: newer(weekly, relayW), fable: newer(fable, relayF))
     }
 
     private static func newer(_ existing: Metric?, _ incoming: Metric?) -> Metric? {

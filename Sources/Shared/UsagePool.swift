@@ -83,6 +83,10 @@ struct PoolLimits: Codable, Equatable {
     var refusedUntil: Date?
     /// Included weekly allowance (Fable and Mythos) can run out while other models still have room.
     var fableRefusedUntil: Date?
+    /// Included Fable window utilisation as reported on `/v1/messages` response headers (0...1).
+    var fable: Double? = nil
+    var fableReset: Date? = nil
+    var fableObserved: Date? = nil
     /// Per-model-family rate-limit cooldowns when overall windows remain open.
     var modelRefusedUntil: [String: Date]? = nil
     var observed: Date
@@ -125,6 +129,29 @@ struct PoolLimits: Codable, Equatable {
         let prefix = "anthropic-ratelimit-unified-"
         let five = value(prefix + "5h-utilization").flatMap(Double.init)
         let week = value(prefix + "7d-utilization").flatMap(Double.init)
+        var fableBucket: String? = nil
+        var fableUtil: Double? = nil
+        if let direct = value(prefix + "7d_oi-utilization").flatMap(Double.init), direct.isFinite {
+            fableBucket = "7d_oi"
+            fableUtil = direct
+        } else if let named = value(prefix + "7d_fable-utilization").flatMap(Double.init), named.isFinite {
+            fableBucket = "7d_fable"
+            fableUtil = named
+        } else if PoolRequest.usesIncludedAllowance(model) {
+            for pair in headers {
+                let lower = pair.0.lowercased()
+                guard lower.hasPrefix(prefix), lower.hasSuffix("-utilization") else { continue }
+                let bucket = String(lower.dropFirst(prefix.count).dropLast("-utilization".count))
+                guard !bucket.isEmpty, bucket != "5h", bucket != "7d",
+                      let parsed = Double(pair.1), parsed.isFinite else { continue }
+                fableBucket = bucket
+                fableUtil = parsed
+                break
+            }
+        }
+        let fableReset = fableBucket.flatMap { date(prefix + $0 + "-reset") }
+            ?? date(prefix + "7d_oi-reset")
+            ?? date(prefix + "7d_fable-reset")
         let status = value(prefix + "status")
         let fiveRejected = value(prefix + "5h-status") == "rejected"
         let weekRejected = value(prefix + "7d-status") == "rejected"
@@ -151,19 +178,24 @@ struct PoolLimits: Codable, Equatable {
                 || (rateLimited && claim == nil && weekExplicitlyAllowed && (five ?? 0) < 1 && (week ?? 0) < 1))
         let rejected = rateLimited || status == "rejected" || fiveRejected || weekRejected
             || (fableOnly && fableRejected) || (!overallRejected && !rejectedScopedBuckets.isEmpty)
-        guard five != nil || week != nil || status != nil || rejected else { return nil }
+        guard five != nil || week != nil || fableUtil != nil || status != nil || rejected else { return nil }
         var limits = PoolLimits(fiveHour: five ?? 0,
                                 fiveHourReset: date(prefix + "5h-reset"),
                                 week: week ?? 0,
                                 weekReset: date(prefix + "7d-reset"),
                                 refusedUntil: nil,
                                 observed: now)
+        if let fableUtil {
+            limits.fable = fableUtil
+            limits.fableReset = fableReset
+            limits.fableObserved = now
+        }
         if rejected {
             // The representative reset can belong to a different window when
             // several have run out. Prefer the reset of the window that refused.
             let windowReset: Date?
             if fableOnly {
-                windowReset = date(prefix + "7d_oi-reset")
+                windowReset = fableReset
             } else if modelOnly {
                 windowReset = rejectedScopedBuckets.compactMap { date(prefix + $0 + "-reset") }.max()
             } else {
@@ -176,6 +208,11 @@ struct PoolLimits: Codable, Equatable {
             let until = windowReset ?? date(prefix + "reset") ?? now.addingTimeInterval(wait)
             if fableOnly {
                 limits.fableRefusedUntil = until
+                if limits.fable == nil {
+                    limits.fable = 1
+                    limits.fableReset = fableReset ?? until
+                    limits.fableObserved = now
+                }
             } else if modelOnly, let family = PoolRequest.modelFamily(model) {
                 limits.modelRefusedUntil = [family: until]
             } else {
@@ -225,6 +262,8 @@ struct IncludedAllowanceReading: Equatable {
         updated.observed = observed
         if let weeklyUsed, (0...1).contains(weeklyUsed) { updated.week = weeklyUsed }
         if let includedUsed, (0..<1).contains(includedUsed) {
+            updated.fable = includedUsed
+            updated.fableObserved = observed
             updated.fableRefusedUntil = nil
             updated.modelRefusedUntil?["fable"] = nil
             updated.modelRefusedUntil?["mythos"] = nil

@@ -241,6 +241,24 @@ struct RoutingDashboard: View {
                 row.fable = RoutingUsageMetric(percent: percent, observedAt: observed, source: source)
             }
         }
+        if let limits {
+            let relaySource = L10n.text(ClaudeUsageDisplay.Source.relay.rawValue)
+            if (0 ..< 5 * 3600).contains(now.timeIntervalSince(limits.observed)),
+               (limits.weekReset ?? .distantFuture) > now {
+                let percent = Int((limits.week * 100).rounded())
+                if (0...100).contains(percent), row.weekly == nil || limits.observed > row.weekly!.observedAt {
+                    row.weekly = RoutingUsageMetric(percent: percent, observedAt: limits.observed, source: relaySource)
+                }
+            }
+            let fableAt = limits.fableObserved ?? limits.observed
+            if let fable = limits.fable, (0 ..< 5 * 3600).contains(now.timeIntervalSince(fableAt)),
+               (limits.fableReset ?? limits.weekReset ?? .distantFuture) > now {
+                let percent = Int((fable * 100).rounded())
+                if (0...100).contains(percent), row.fable == nil || fableAt > row.fable!.observedAt {
+                    row.fable = RoutingUsageMetric(percent: percent, observedAt: fableAt, source: relaySource)
+                }
+            }
+        }
         if report?.tokenRefused == true || pool.lending[id] == .expired {
             row.state = "Sign in again"
             row.needsAttention = true
