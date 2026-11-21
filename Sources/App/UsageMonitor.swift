@@ -400,7 +400,8 @@ final class UsageMonitor: ObservableObject {
                                               fiveHourReset: live.fiveHourReset,
                                               weekReset: live.weekReset,
                                               fable: live.fable,
-                                              fableReset: live.fableReset)
+                                              fableReset: live.fableReset,
+                                              weeklyReadingPresent: live.weeklyReadingPresent)
                     entry.isLive = true
                     entry.plan = live.plan
                     entry.refreshed = fetched
@@ -464,7 +465,7 @@ final class UsageMonitor: ObservableObject {
                 } else {
                     row["noFiveHourLimit"] = true
                 }
-                row["week"] = usage.week
+                if usage.weeklyReadingPresent { row["week"] = usage.week }
                 if let reset = usage.fiveHourReset { row["fiveHourReset"] = stamp.string(from: reset) }
                 if let reset = usage.weekReset { row["weekReset"] = stamp.string(from: reset) }
                 if let fable = usage.fable { row["fable"] = fable }

@@ -15,12 +15,14 @@ struct DemoDashboard: View {
         let hasBackup = !empty && !removed
         let enabled = exclusiveAccount == nil
         let primary = RoutingAccountDisplay(id: "personal", name: "alex@example.com", isPrimary: true,
-                                            state: L10n.text("Signed in"), weeklyUsed: empty ? nil : 96,
+                                            state: L10n.text("Signed in"), weekly: empty ? nil : RoutingUsageMetric(percent: 96, observedAt: start, source: L10n.text("Claude usage service")),
+                                            fable: empty ? nil : RoutingUsageMetric(percent: 100, observedAt: start, source: L10n.text("Claude usage service")),
                                             fableReset: empty ? nil : Date(timeIntervalSince1970: 1_783_555_200),
                                             canRecheck: enabled, recheckPending: queued,
                                             nickname: labels.nickname(for: "personal"))
         let backup = RoutingAccountDisplay(id: "studio", name: "studio@example.org", isPrimary: false,
-                                           state: L10n.text("Signed in"), weeklyUsed: 24,
+                                           state: L10n.text("Signed in"), weekly: RoutingUsageMetric(percent: 24, observedAt: start, source: L10n.text("Claude usage service")),
+                                           fable: RoutingUsageMetric(percent: 0, observedAt: start, source: L10n.text("Claude usage service")),
                                            nickname: labels.nickname(for: "studio"))
         let route: RouteMapSignal? = !hasBackup || !enabled ? nil : RouteMapSignal(
             phase: active ? .sending : .answered, backup: tryingBackup, model: "Fable 5.2", at: start, mainLimited: tryingBackup)

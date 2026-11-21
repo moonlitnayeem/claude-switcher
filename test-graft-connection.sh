@@ -13,6 +13,7 @@ trap cleanup EXIT
 swiftc -swift-version 5 -target "$(uname -m)-apple-macos${MACOS_DEPLOYMENT_TARGET:-13.0}" \
     "$ROOT"/Sources/Shared/*.swift "$ROOT/Sources/App/GraftConnection.swift" \
     "$ROOT/Sources/App/ClaudeAccountLabels.swift" "$ROOT/Sources/App/Accessibility.swift" \
+    "$ROOT/Sources/App/ClaudeUsageDisplay.swift" "$ROOT/Tests/GraftConnection/UsageDisplayChecks.swift" \
     "$ROOT/Tests/GraftConnection/main.swift" -o "$FIXTURE/checks"
 python3 "$ROOT/Tests/GraftConnection/fixture.py" "$FIXTURE" &
 server=$!

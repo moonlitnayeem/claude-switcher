@@ -6,6 +6,8 @@ struct GraftConnectionView: View {
     private let connection = GraftConnection()
     @ObservedObject private var labels = ClaudeAccountLabels.graft
     @State private var labelTarget: ClaudeLabelTarget?
+    @State private var usageTarget: ClaudeUsageTarget?
+    @State private var usageReadings: [UUID: ClaudeUsageDisplay.Reading] = [:]
     @State private var snapshot = GraftConnection.Snapshot()
     @State private var loaded = false
     @State private var profile = "main"
@@ -25,6 +27,11 @@ struct GraftConnectionView: View {
                      refresh: refreshStatus, recheck: { member in recheck(member, profile: key) },
                      useOnly: { setMode($0, for: key) },
                      renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) },
+                     updateUsage: { id in
+                         guard let account = snapshot.accountUUIDs[id] else { return }
+                         usageTarget = ClaudeUsageTarget(id: account, profile: key, member: id,
+                                                       name: accountName(id, profile: key))
+                     },
                      launchControls: key == "main" ? ClaudeLaunchControls() : nil) {
             if snapshot.profiles.count > 1 {
                 Picker("Claude profile", selection: Binding(get: { key }, set: { profile = $0 })) {
@@ -40,10 +47,11 @@ struct GraftConnectionView: View {
         .task {
             while !Task.isCancelled {
                 let revision = modeRevision
-                let next = await Task.detached(priority: .utility) { connection.read() }.value
+                let (next, readings) = await readStatusAndUsage()
                 guard !Task.isCancelled else { return }
                 if revision == modeRevision && !changingMode {
                     snapshot = next
+                    usageReadings = readings
                     loaded = true
                 }
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
@@ -51,6 +59,21 @@ struct GraftConnectionView: View {
         }
         .sheet(item: $labelTarget) { target in
             ClaudeAccountLabelEditor(id: target.id, accountName: target.name, labels: labels)
+        }
+        .sheet(item: $usageTarget) { target in
+            ClaudeUsageEditor(accountName: target.name) { values in
+                try await Task.detached(priority: .userInitiated) {
+                    let current = connection.read()
+                    guard current.accountUUIDs[target.member] == target.id,
+                          current.accounts(for: target.profile).members.contains(target.member) else {
+                        throw ClaudeUsageEditorError.accountChanged
+                    }
+                    if let values { try ClaudeUsageDisplay.save(values, account: target.id) }
+                    else { try ClaudeUsageDisplay.clear(account: target.id) }
+                }.value
+                modeRevision += 1
+                _ = await refreshStatus()
+            }
         }
         .alert("Graft connection", isPresented: Binding(get: { message != nil },
                                                         set: { if !$0 { message = nil } })) {
@@ -81,22 +104,23 @@ struct GraftConnectionView: View {
         let rows = accounts.members.map { id -> RoutingAccountDisplay in
             let report = snapshot.report(for: id, from: profile)
             let limits = report?.limits
-            let weekIsCurrent = limits.map { ($0.weekReset ?? .distantFuture) > now } ?? false
-            let week = weekIsCurrent ? limits.map { Int((min(1, max(0, $0.week)) * 100).rounded(.down)) } : nil
+            let identity = snapshot.accountUUIDs[id]
+            let usage = identity.flatMap { usageReadings[$0] }
             let name = accountName(id, profile: profile)
             let state: String
             if report?.tokenRefused == true { state = "Sign in again" }
-            else if week == 100 { state = "Weekly limit reached" }
+            else if usage?.weekly?.percent == 100 { state = "Weekly limit reached" }
             else if report?.lastServed != nil { state = "Has answered requests" }
             else { state = "Saved in Graft" }
             var row = RoutingAccountDisplay(id: id, name: name, isPrimary: id == profile,
-                                            state: L10n.text(state), weeklyUsed: week)
-            if week != nil { row.weeklyObservation = limits?.observed }
+                                            state: L10n.text(state),
+                                            weekly: usage?.weekly.map(RoutingUsageMetric.init),
+                                            fable: usage?.fable.map(RoutingUsageMetric.init),
+                                            canUpdateUsage: identity != nil)
             row.nickname = labels.nickname(for: id)
             row.canSelect = snapshot.canSelectAccount(id, for: profile)
-            row.needsAttention = report?.tokenRefused == true || week == 100
+            row.needsAttention = report?.tokenRefused == true || usage?.weekly?.percent == 100
             if let reset = limits?.fableRefusedUntil, reset > now { row.fableReset = reset }
-            row.recheckFeedback = snapshot.recheckFeedback(for: id, from: profile)
             row.canRecheck = !rechecking && snapshot.canRecheck(id, from: profile)
             row.recheckPending = report?.fableRecheckPending == true
             return row
@@ -122,10 +146,10 @@ struct GraftConnectionView: View {
                   backupIDs.contains(accounts.canonical(last.servedBy)), let session = last.session,
                   let choice = snapshot.chatChoices[session], accounts.canonical(choice) == accounts.canonical(last.servedBy) {
             title = "Your backup answered"
-            detail = rows.first?.weeklyUsed == 100
+            detail = rows.first?.weekly?.percent == 100
                 ? "Your main account is full. This chat has a saved backup choice in Graft."
                 : "This chat is set to use its backup account in Graft."
-        } else if rows.first?.weeklyUsed == 100 {
+        } else if rows.first?.weekly?.percent == 100 {
             title = "Your main account is full"
             detail = "Graft can send eligible requests to a backup. See which account answered below."
         } else {
@@ -179,13 +203,26 @@ struct GraftConnectionView: View {
         }
     }
 
+    private func readStatusAndUsage() async -> (GraftConnection.Snapshot, [UUID: ClaudeUsageDisplay.Reading]) {
+        await Task.detached(priority: .utility) {
+            let next = connection.read()
+            let now = Date()
+            let observed = ClaudeUsageDisplay.graftReadings(at: connection.root.appending(path: "usage-status.json"), now: now)
+            let readings = Dictionary(uniqueKeysWithValues: Set(next.accountUUIDs.values).map { account in
+                (account, ClaudeUsageDisplay.load(account: account, graftReading: observed[account], now: now))
+            })
+            return (next, readings)
+        }.value
+    }
+
     @MainActor
     private func refreshStatus() async -> Bool {
         let revision = modeRevision
-        let fresh = await Task.detached(priority: .userInitiated) { connection.read() }.value
+        let (fresh, readings) = await readStatusAndUsage()
         if revision == modeRevision && !changingMode {
             modeRevision += 1
             snapshot = fresh
+            usageReadings = readings
             loaded = true
         }
         return fresh.status != nil
@@ -201,8 +238,7 @@ struct GraftConnectionView: View {
             _ = await refreshStatus()
             rechecking = false
             if !queued {
-                message = snapshot.recheckFeedback(for: member, from: profile, declined: true)
-                    ?? L10n.text("The relay could not queue this Fable check. Refresh to see the latest account status.")
+                message = L10n.text("The relay could not queue this Fable check. Refresh to see the latest account status.")
             }
         }
     }

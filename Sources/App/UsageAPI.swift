@@ -27,6 +27,7 @@ enum UsageAPI {
         var plan: String?
         var fable: Int? = nil
         var fableReset: Date? = nil
+        var weeklyReadingPresent = true
     }
 
     enum Failure: LocalizedError {
@@ -102,7 +103,8 @@ enum UsageAPI {
                        weekReset: weekly?.resets,
                        plan: (body["subscription_type"] as? String)?.capitalized,
                        fable: fable?.used,
-                       fableReset: fable?.resets)
+                       fableReset: fable?.resets,
+                       weeklyReadingPresent: weekly != nil)
     }
 
     private static func window(_ value: Any?) -> (used: Int, resets: Date?)? {

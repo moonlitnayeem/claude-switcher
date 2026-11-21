@@ -2276,6 +2276,7 @@ enum Graft {
         var weekReset: Date?
         var fable: Int? = nil
         var fableReset: Date? = nil
+        var weeklyReadingPresent = true
 
         /// Claude only writes this while it is running, so an old sample says
         /// nothing useful about a five-hour window that has since rolled over.

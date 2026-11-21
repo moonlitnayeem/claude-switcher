@@ -8,14 +8,31 @@ struct RoutingAccountDisplay: Identifiable {
     var isPrimary: Bool
     var state: String
     var needsAttention = false
-    var weeklyUsed: Int?
-    var weeklyObservation: Date?
+    var weekly: RoutingUsageMetric?
+    var fable: RoutingUsageMetric?
+    var canUpdateUsage = false
     var fableReset: Date?
-    var recheckFeedback: String?
     var canRecheck = false
     var recheckPending = false
     var nickname: String? = nil
     var canSelect = true
+}
+
+struct RoutingUsageMetric {
+    var percent: Int
+    var observedAt: Date
+    var source: String
+
+    init(percent: Int, observedAt: Date, source: String) {
+        self.percent = percent
+        self.observedAt = observedAt
+        self.source = source
+    }
+
+    init(_ metric: ClaudeUsageDisplay.Metric) {
+        self.init(percent: metric.percent, observedAt: metric.observedAt,
+                  source: L10n.text(metric.source.rawValue))
+    }
 }
 
 struct RoutingDisplay {
@@ -154,8 +171,8 @@ struct RoutingDashboard: View {
         if let live = pool.status?.activeRoutes?.filter({ $0.from == key }).max(by: { $0.startedAt < $1.startedAt }) {
             result.route = RouteMapSignal(phase: .sending, backup: !pool.sameIdentity(live.member, key),
                                           model: live.model.map(Self.modelName), at: live.startedAt,
-                                          mainLimited: !PoolPolicy.hasRoom(pool.status?.members.first { $0.id == key }?.limits,
-                                                                           now: Date(), model: live.model))
+                                          mainLimited: rows.first?.weekly?.percent == 100 ||
+                                            (PoolRequest.isFable(live.model) && rows.first?.fable?.percent == 100))
         } else if let recent = history.last {
             result.route = RouteMapSignal(phase: (200..<300).contains(recent.status) ? .answered : .failed,
                                           backup: !pool.sameIdentity(recent.servedBy, key), model: recent.model.map(Self.modelName), at: recent.at)
@@ -211,15 +228,19 @@ struct RoutingDashboard: View {
     private func account(_ id: String, primary: String) -> RoutingAccountDisplay {
         let report = pool.status?.members.first { $0.id == id }
         let limits = report?.limits
-        let live = pool.profile(of: id).flatMap(usage.entry(for:))?.currentUsage
-        // A 429 without utilization headers can leave a zero placeholder in the relay.
-        let week: Int? = live?.week ?? limits.flatMap { value in
-            guard value.weekReset.map({ $0 > Date() }) ?? (value.week > 0) else { return nil }
-            return Int((min(1, max(0, value.week)) * 100).rounded())
+        let now = Date()
+        var row = RoutingAccountDisplay(id: id, name: name(id), isPrimary: id == primary, state: "Checking login")
+        if let entry = pool.profile(of: id).flatMap(usage.entry(for:)),
+           let live = entry.currentUsage, let observed = entry.refreshed,
+           (0 ..< 5 * 3600).contains(now.timeIntervalSince(observed)) {
+            let source = L10n.text(entry.isLive ? "Claude usage service" : "Claude profile record")
+            if live.weeklyReadingPresent, (0...100).contains(live.week), (live.weekReset ?? .distantFuture) > now {
+                row.weekly = RoutingUsageMetric(percent: live.week, observedAt: observed, source: source)
+            }
+            if let percent = live.fable, (0...100).contains(percent), (live.fableReset ?? .distantFuture) > now {
+                row.fable = RoutingUsageMetric(percent: percent, observedAt: observed, source: source)
+            }
         }
-        var row = RoutingAccountDisplay(id: id, name: name(id), isPrimary: id == primary,
-                                         state: "Checking login", weeklyUsed: week)
-        if live?.week == nil, week != nil { row.weeklyObservation = limits?.observed }
         if report?.tokenRefused == true || pool.lending[id] == .expired {
             row.state = "Sign in again"
             row.needsAttention = true
@@ -229,8 +250,8 @@ struct RoutingDashboard: View {
         } else if pool.lending[id] == .unreadable {
             row.state = "Keychain locked"
             row.needsAttention = true
-        } else if !PoolPolicy.hasRoom(limits, now: Date()) {
-            row.state = "Usage limit reached"
+        } else if row.weekly?.percent == 100 {
+            row.state = "Weekly limit reached"
             row.needsAttention = true
         } else if pool.lending[id] == .ready {
             row.state = "Signed in"
@@ -291,6 +312,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     let useOnly: (String) -> Void
     var removeBackup: ((String) -> Void)? = nil
     var renameAccount: ((String) -> Void)? = nil
+    var updateUsage: ((String) -> Void)? = nil
     var launchControls: ClaudeLaunchControls? = nil
     @ViewBuilder let profile: () -> Profile
     @ViewBuilder let accountActions: () -> AccountActions
@@ -377,6 +399,11 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                                 }.font(.callout).foregroundStyle(.secondary).padding(13)
                             }
                         }.card(paper)
+                        if data.externallyManaged {
+                            Text("Usage readings update this dashboard. Graft still decides where to send each request.")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     VStack(alignment: .leading, spacing: 9) {
                         HStack {
@@ -416,15 +443,6 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                     Text("·").accessibilityHidden(true)
                     Text(item.state).foregroundStyle(item.needsAttention ? Color.primary : .secondary)
                 }.font(.caption).foregroundStyle(.secondary)
-                if compact { weekly(item) }
-                if let observed = item.weeklyObservation {
-                    Text(L10n.format("Weekly usage last seen %@", observed.formatted(date: .abbreviated, time: .shortened)))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let feedback = item.recheckFeedback {
-                    Text(feedback).font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 if let reset = item.fableReset {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(L10n.format("Saved Fable reset time · %@", reset.formatted(date: .abbreviated, time: .shortened)))
@@ -444,9 +462,13 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                     HStack(spacing: 12) { rowActions(item) }
                     VStack(alignment: .leading, spacing: 6) { rowActions(item) }
                 }.padding(.top, 4)
-            }
-            Spacer(minLength: 2)
-            if !compact { weekly(item).padding(.top, 1) }
+                let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 9))
+                                     : AnyLayout(HStackLayout(alignment: .top, spacing: 18))
+                layout {
+                    usageBar("Overall weekly", metric: item.weekly, id: "routing.weekly.\(item.id)")
+                    usageBar("Fable usage", metric: item.fable, id: "routing.fable.\(item.id)")
+                }.padding(.top, 6)
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 15).padding(.vertical, 12)
         .accessibilityElement(children: .contain)
@@ -477,6 +499,12 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                 .identified("routing.rename.\(item.id)")
                 .font(.caption).buttonStyle(RoutingTextButtonStyle(color: accent))
         }
+        if item.canUpdateUsage, let updateUsage {
+            Button("Update from Claude…") { updateUsage(item.id) }
+                .accessibilityLabel(L10n.format("Update usage from Claude for %@", item.name))
+                .identified("routing.update-usage.\(item.id)")
+                .font(.caption).buttonStyle(RoutingTextButtonStyle(color: accent))
+        }
         if !item.isPrimary, let removeBackup {
             Button("Remove backup") { removeBackup(item.id) }
                 .accessibilityLabel(L10n.format("Remove %@ as a backup", item.name))
@@ -486,18 +514,35 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
         }
     }
 
-    @ViewBuilder private func weekly(_ item: RoutingAccountDisplay) -> some View {
-        if let percent = item.weeklyUsed {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(L10n.format("%ld%% weekly used", percent)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                GeometryReader { geo in
-                    Capsule().fill(accent.opacity(0.13)).overlay(alignment: .leading) {
-                        Capsule().fill(percent >= 95 ? (scheme == .dark ? Color.orange : Color.brown) : accent)
-                            .frame(width: geo.size.width * CGFloat(min(100, max(0, percent))) / 100)
+    private func usageBar(_ title: String, metric: RoutingUsageMetric?, id: String) -> some View {
+        let value = metric.map { L10n.format("%ld%% used", $0.percent) } ?? L10n.text("No recent reading")
+        let source = metric.map { L10n.format("%@ · %@", $0.source,
+                                                $0.observedAt.formatted(date: .abbreviated, time: .shortened)) }
+        return VStack(alignment: .leading, spacing: 4) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    Text(L10n.text(title)).fontWeight(.semibold)
+                    Spacer(minLength: 0)
+                    Text(value).foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(title)).fontWeight(.semibold)
+                    Text(value).foregroundStyle(.secondary)
+                }
+            }.font(.caption)
+            GeometryReader { size in
+                Capsule().fill(accent.opacity(0.15)).overlay(alignment: .leading) {
+                    if let metric {
+                        Capsule().fill(metric.percent >= 95 ? (scheme == .dark ? Color.orange : Color.brown) : accent)
+                            .frame(width: size.size.width * CGFloat(metric.percent) / 100)
                     }
-                }.frame(width: 94, height: 4).accessibilityHidden(true)
-            }
+                }
+            }.frame(height: 4)
+            if let source { Text(source).font(.caption2).foregroundStyle(.secondary) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .spoken(L10n.text(title), value: [value, source].compactMap { $0 }.joined(separator: ", "))
+        .identified(id)
     }
 
     private var activity: some View {

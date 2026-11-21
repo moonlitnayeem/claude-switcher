@@ -12,7 +12,7 @@ AI Switcher opens on its own and includes a local relay for separately configure
 
 The ChatGPT and Codex desktop actions and the optional browser and Terminal profiles work without Graft. To switch accounts in the OpenAI desktop app, use that app’s account controls.
 
-![AI Switcher’s account map showing a sample Fable 5.2 request trying the backup. Both account names are fictional.](docs/images/switcher-routing.png)
+![AI Switcher showing separate overall weekly and Fable usage bars on two fictional accounts.](docs/images/switcher-routing.png)
 
 ## Install
 
@@ -41,7 +41,9 @@ On the main Claude profile, open **More → Open Claude Code in Terminal…** an
 
 ### Check a model’s latest limit
 
-Open **Claude Desktop → Your accounts → Refresh**. The time beneath the button tells you when AI Switcher last read the relay. Each dated weekly reading tells you when that account’s usage was last seen. An account reset can be newer than its reading. Refresh reads the local status without sending a model request.
+Open **Claude Desktop → Your accounts → Refresh**. The time beneath the button tells you when AI Switcher last read the relay. Each account has two bars. **Overall weekly** shows how much of the week’s allowance you used. **Fable** shows how much of that model’s allowance you used. Each figure has its own source and observation time. When there is no recent reading, the bar shows that it is unknown. Refresh reads local status without sending a model request.
+
+When a compatible Graft installation reports a fresh measurement for the same signed-in account, AI Switcher picks it up automatically. For a Graft-linked account, you can also choose **Update from Claude…** to bring in numbers from your signed-in Claude usage page. Expand **This week** in Claude to include the Fable line, copy the usage text, and check the account and percentages in the preview before saving. AI Switcher keeps the two numbers and their observation times on your Mac. Copied page text is discarded. The reading is for the dashboard and expires after five hours. The relay keeps its own record of which requests succeeded.
 
 Under **Recent activity**, a model is listed if its latest recorded request returned a rate limit. A later reply from a different model leaves that entry visible. A newer result for the same model updates it. The list covers the recent requests the relay still has for this profile, including Fable, Mythos and other named models.
 

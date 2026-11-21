@@ -1453,6 +1453,10 @@ do {
     check(UsageAPI.reading(from: epoch)?.fiveHourReset != nil, "epoch seconds parse too")
 
     let missingWeek: [String: Any] = ["five_hour": ["utilization": 5]]
+    check(UsageAPI.reading(from: missingWeek)?.weeklyReadingPresent == false,
+          "a session reading does not establish weekly use")
+    check(UsageAPI.reading(from: ["seven_day": ["utilization": 0]])?.weeklyReadingPresent == true,
+          "a recorded weekly zero is a real measurement")
     check(UsageAPI.reading(from: missingWeek)?.week == 0,
           "a missing weekly window reads as nothing used, not as a failure")
     check(UsageAPI.reading(from: missingWeek)?.fable == nil,

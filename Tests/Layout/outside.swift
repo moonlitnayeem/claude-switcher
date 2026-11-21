@@ -24,7 +24,8 @@ func walk(_ element: AXUIElement, depth: Int) {
     let identifier = text(element, "AXIdentifier")
     if CommandLine.arguments.count == 5, CommandLine.arguments[3] == "--press-routing-fixture",
        identifier == CommandLine.arguments[4],
-       ["window.routing.refresh", "window.routing.automatic", "window.routing.only.studio", "window.routing.only.personal"].contains(identifier) {
+       ["window.routing.refresh", "window.routing.automatic", "window.routing.only.studio", "window.routing.only.personal",
+        "window.routing.usage-editor.paste", "window.routing.usage-editor.save", "window.routing.usage-editor.clear"].contains(identifier) {
         let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
         exit(result == .success ? 0 : 1)
     }

@@ -114,3 +114,5 @@ precondition(labels.nickname(for: "main") == "School")
 labels.set("  ", for: "main")
 precondition(ClaudeAccountLabels(scope: "graft", defaults: prefs).nickname(for: "main") == nil)
 print("Local account labels survive relaunch, preserve the other mode, and clear without changing accounts")
+
+try checkClaudeUsageDisplay(in: root.appending(path: "display-fixture"))

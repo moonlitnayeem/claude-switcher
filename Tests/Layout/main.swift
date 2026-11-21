@@ -515,6 +515,10 @@ for page in pages {
                         check(element("window.routing.\(id)", in: tree)?.name == title,
                               "\(place): \(id) names the affected account")
                     }
+                    for (metric, percent) in [("weekly.personal", 96), ("fable.personal", 100), ("weekly.studio", 24), ("fable.studio", 0)] {
+                        check(element("window.routing.\(metric)", in: tree)?.value.contains(L10n.format("%ld%% used", percent)) == true,
+                              "\(place): each usage window shows its own percentage and exposes zero")
+                    }
                     check(element("window.routing.remove.personal", in: tree) == nil,
                           "\(place): only backups can be removed")
                     check(element("window.routing.launch.desktop", in: tree)?.name == L10n.text("Open Claude Desktop"),
@@ -785,6 +789,14 @@ do {
           "the existing connection displays controls but cannot change accounts while disconnected")
     check(element("window.routing.refresh", in: tree)?.enabled == true,
           "the refresh button remains available while the relay is disconnected")
+    for account in ["main", "studio"] {
+        for metric in ["weekly", "fable"] {
+            check(element("window.routing.\(metric).\(account)", in: tree)?.value == L10n.text("No recent reading"),
+                  "the linked dashboard labels an unknown \(metric) reading for \(account)")
+        }
+        check(element("window.routing.update-usage.\(account)", in: tree) == nil,
+              "a linked row without a verified account ID cannot import usage")
+    }
     _ = readFromOutside(managed, pressRoutingFixture: "window.routing.refresh")
     settle()
     check((seen(managed) ?? []).contains { [$0.name, $0.value].contains(L10n.text("Couldn’t refresh the relay status. Check the connection and try again.")) },
@@ -798,6 +810,60 @@ do {
             && element("window.shared-usage.add", in: tree) == nil,
           "Graft retains control of its assignments")
     managed.orderOut(nil)
+}
+
+do {
+    let id = UUID().uuidString
+    let account = [["id": "studio", "email": "studio@example.org", "accountUuid": id]]
+    let poolDirectory = savedGraft.appending(path: "pool")
+    try fm.createDirectory(at: poolDirectory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(account).write(to: poolDirectory.appending(path: "accounts.json"))
+    let measured: [String: Any] = ["accountUuid": id, "live": true,
+        "refreshedAt": ISO8601DateFormatter().string(from: Date()), "week": 0, "fable": 7]
+    try JSONSerialization.data(withJSONObject: ["profiles": [measured]])
+        .write(to: savedGraft.appending(path: "usage-status.json"))
+    let window = hosted(GraftConnectionView().frame(width: 740, height: 680)
+        .defaultAppStorage(layoutDefaults).environment(\.controlSurface, ControlSurface.window), title: "Linked usage fixture")
+    let tree = checkAccessibility(window, surface: ControlSurface.window, "identity-bound linked reading")
+    for (metric, expected) in [("weekly", 0), ("fable", 7)] {
+        let reading = element("window.routing.\(metric).studio", in: tree)?.value
+        check(reading?.contains(L10n.format("%ld%% used", expected)) == true
+              && reading?.contains(L10n.text("Graft usage report")) == true,
+              "the linked dashboard reads identity-bound \(metric) usage from its owner")
+    }
+    check(element("window.routing.update-usage.studio", in: tree)?.enabled == true,
+          "the row of a verified linked account can import usage")
+    window.orderOut(nil)
+}
+
+do {
+    var clipboardReads = 0
+    var applied = [ClaudeUsageDisplay.Values?]()
+    let fixture = ClaudeUsageEditor(accountName: "studio@example.org", readClipboard: {
+        clipboardReads += 1
+        return "This session\n99% used\nThis week\n0% used\nFable\n7% used"
+    }, apply: { applied.append($0) })
+    let window = hosted(fixture.environment(\.controlSurface, ControlSurface.window), title: "Usage import fixture")
+    let tree = checkAccessibility(window, surface: ControlSurface.window, "usage import")
+    let prefix = "window.routing.usage-editor."
+    check(clipboardReads == 0 && element(prefix + "save", in: tree)?.enabled == false,
+          "opening a usage import leaves the clipboard alone and Save disabled")
+    check(tree.contains { [$0.name, $0.value].contains("studio@example.org") },
+          "the usage preview names the account that will receive its readings")
+    _ = readFromOutside(window, pressRoutingFixture: prefix + "paste")
+    settle()
+    let preview = seen(window) ?? []
+    check(clipboardReads == 1 && applied.isEmpty && element(prefix + "save", in: preview)?.enabled == true,
+          "explicit paste previews the two readings and waits for confirmation")
+    _ = readFromOutside(window, pressRoutingFixture: prefix + "save")
+    settle()
+    check(applied == [.init(weekly: 0, fable: 7)], "Save passes the confirmed weekly and Fable values, ignoring session use")
+    window.orderOut(nil)
+    let clearWindow = hosted(fixture.environment(\.controlSurface, ControlSurface.window), title: "Clear usage fixture")
+    _ = readFromOutside(clearWindow, pressRoutingFixture: prefix + "clear")
+    settle()
+    check(applied.last == .some(nil) && clipboardReads == 1, "Clear removes only the saved readings without reading the clipboard")
+    clearWindow.orderOut(nil)
 }
 
 do {
