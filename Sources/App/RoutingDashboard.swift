@@ -172,7 +172,7 @@ struct RoutingDashboard: View {
             result.route = RouteMapSignal(phase: .sending, backup: !pool.sameIdentity(live.member, key),
                                           model: live.model.map(Self.modelName), at: live.startedAt,
                                           mainLimited: rows.first?.weekly?.percent == 100 ||
-                                            (PoolRequest.isFable(live.model) && rows.first?.fable?.percent == 100))
+                                            (PoolRequest.usesIncludedAllowance(live.model) && rows.first?.fable?.percent == 100))
         } else if let recent = history.last {
             result.route = RouteMapSignal(phase: (200..<300).contains(recent.status) ? .answered : .failed,
                                           backup: !pool.sameIdentity(recent.servedBy, key), model: recent.model.map(Self.modelName), at: recent.at)

@@ -9,6 +9,7 @@ actor PoolState {
         /// Nil means the token the request arrived with.
         var token: String?
         var fableRecheck: UUID? = nil
+        var staleProbe: UUID? = nil
     }
 
     private struct Runtime {
@@ -53,13 +54,22 @@ actor PoolState {
     /// By account rather than by member: two members on one account are one
     /// allowance, and what the service says about either is true of both.
     private var limits: [String: PoolLimits] = [:]
+    /// Long enough to avoid hammering a genuinely exhausted backup, short enough
+    /// to discover an early reset on an inference-only account automatically.
+    static let staleProbeInterval: TimeInterval = 5 * 60
+
     private enum FableRecheck {
         case queued, sending(UUID)
         // Claude Code can recreate a thread only after its first attempt on
         // the other account reports that the old thread lives elsewhere.
         case awaitingNewThread(session: String?, until: Date)
     }
+    private enum StaleProbe {
+        case sending(UUID)
+        case awaitingNewThread(session: String?, modelFamily: String?, until: Date)
+    }
     private var fableRechecks: [String: FableRecheck] = [:]
+    private var staleProbes: [String: StaleProbe] = [:]
     private var conversations: [String: Conversation] = [:]
     private var recent: [PoolRouting] = []
     private var activeRoutes: [UUID: PoolActiveRoute] = [:]
@@ -198,6 +208,11 @@ actor PoolState {
             if case .awaitingNewThread(_, let until) = check { return until > now }
             return true
         }
+        staleProbes = staleProbes.filter { key, probe in
+            guard named.contains(key) else { return false }
+            if case .awaitingNewThread(_, _, let until) = probe { return until > now }
+            return true
+        }
     }
 
     func recheckFable(_ id: String, now: Date = Date()) {
@@ -219,6 +234,15 @@ actor PoolState {
         let key = accountKey(id)
         guard case .sending(ticket) = fableRechecks[key] else { return }
         fableRechecks[key] = threadMissing ? .awaitingNewThread(session: session, until: now + 60) : nil
+    }
+
+    func finishStaleProbe(_ id: String, ticket: UUID, newThreadFor session: String? = nil,
+                          model: String? = nil, threadMissing: Bool = false, now: Date = Date()) {
+        let key = accountKey(id)
+        guard case .sending(ticket) = staleProbes[key] else { return }
+        staleProbes[key] = threadMissing
+            ? .awaitingNewThread(session: session, modelFamily: PoolRequest.modelFamily(model), until: now + 60)
+            : nil
     }
 
     /// Which member a token belongs to. Every request carrying one counts as
@@ -290,11 +314,26 @@ actor PoolState {
         let candidates = Self.candidates(for: sender, in: configuration.members, canLend: canLend)
         guard candidates.count > 1 || fableRechecks[accountKey(own)] != nil else { return asSent }
         var recheck: String?
+        var probeTarget: String?
+        let modelFamily = PoolRequest.modelFamily(model)
+        let pageDirectory = Graft.applicationSupport
+            .appending(path: "ClaudeSwitcher").appending(path: "display-usage")
         let accounts = candidates.map { member in
             let key = member.account ?? member.id
             var reading = limits[key]
+            for identifier in [member.account, member.id].compactMap({ $0 }) {
+                guard let current = reading,
+                      let page = IncludedAllowancePage.load(account: identifier, from: pageDirectory, now: now)
+                else { continue }
+                let corrected = page.corrected(current, now: now)
+                if corrected != current {
+                    limits[key] = corrected
+                    reading = corrected
+                }
+                break
+            }
             if recheck == nil, choice == nil || choice?.member == member.id,
-               PoolRequest.isFable(model), member.id == own || canLend(member),
+               PoolRequest.usesIncludedAllowance(model), member.id == own || canLend(member),
                (reading?.fableRefusedUntil ?? .distantPast) > now, PoolPolicy.hasRoom(reading, now: now),
                let requested = fableRechecks[key] {
                 switch requested {
@@ -306,6 +345,12 @@ actor PoolState {
                     break
                 }
                 if recheck == member.id { reading?.fableRefusedUntil = nil }
+            }
+            if probeTarget == nil, recheck == nil, choice == nil, member.id != own, canLend(member),
+               case .awaitingNewThread(let expected, let expectedFamily, let until) = staleProbes[key],
+               !continuing, expected == session, expectedFamily == modelFamily, until > now {
+                probeTarget = member.id
+                reading = nil
             }
             return PoolPolicy.Account(id: member.id, limits: reading, usable: member.id == own || canLend(member))
         }
@@ -343,8 +388,28 @@ actor PoolState {
         // the sender's own account is where it began.
         if bound, holder == nil { prefer.append(own) }
         if let recheck { prefer.insert(recheck, at: 0) }
+        if let probeTarget { prefer.insert(probeTarget, at: 0) }
         var ids = PoolPolicy.order(own: own, accounts: accounts, prefer: prefer, now: now,
                                    model: model, primaryFirst: primaryFirst)
+        // If no backup has room under cached observations, an inference-only
+        // backup whose last reading is stale can still have been reset early.
+        // Probe the stalest such backup once rather than failing on a 429.
+        if choice == nil, recheck == nil, probeTarget == nil, !ids.contains(where: { $0 != own }) {
+            let staleBackup = candidates
+                .filter { member in
+                    guard member.id != own, canLend(member) else { return false }
+                    let key = member.account ?? member.id
+                    guard staleProbes[key] == nil, let reading = limits[key] else { return false }
+                    return now.timeIntervalSince(reading.observed) >= Self.staleProbeInterval
+                }
+                .min { (limits[$0.account ?? $0.id]?.observed ?? .distantFuture) < (limits[$1.account ?? $1.id]?.observed ?? .distantFuture) }
+            if let staleBackup {
+                probeTarget = staleBackup.id
+                let ownReading = accounts.first { $0.id == own }?.limits
+                let ownHasRoom = PoolPolicy.hasRoom(ownReading, now: now, model: model, useMargin: !primaryFirst)
+                ids = ownHasRoom ? [own, staleBackup.id, own] : [staleBackup.id, own]
+            }
+        }
         // The last word is always the sender's own account, asked again if it
         // was asked already: whatever the lent accounts answered last — a
         // refused login, a plan without the model, a limit with their own
@@ -360,32 +425,53 @@ actor PoolState {
                 fableRechecks[accountKey(id)] = .sending(ticket)
                 attempt.fableRecheck = ticket
             }
+            if id == probeTarget {
+                probeTarget = nil
+                let ticket = UUID()
+                staleProbes[accountKey(id)] = .sending(ticket)
+                attempt.staleProbe = ticket
+            }
             return attempt
         }
     }
 
     // A general usage poll or a successful answer on another model says
-    // nothing about a Fable refusal that the service has already timed.
-    private func preserveCooldowns(in reading: inout PoolLimits, from previous: PoolLimits?, now: Date) {
-        if let until = previous?.fableRefusedUntil, until > now {
+    // nothing about a model-specific refusal that the service has already timed.
+    private func preserveCooldowns(in reading: inout PoolLimits, from previous: PoolLimits?, now: Date,
+                                   clearingModel: String? = nil, clearAccountWide: Bool = false) {
+        let clearingIncluded = clearingModel != nil && PoolRequest.usesIncludedAllowance(clearingModel)
+        let clearingFamily = PoolRequest.modelFamily(clearingModel)
+        if !clearingIncluded, let until = previous?.fableRefusedUntil, until > now {
             reading.fableRefusedUntil = max(until, reading.fableRefusedUntil ?? .distantPast)
         }
-        if let until = previous?.refusedUntil, until > now {
+        if let previousModels = previous?.modelRefusedUntil {
+            var merged = reading.modelRefusedUntil ?? [:]
+            for (family, until) in previousModels where until > now && family != clearingFamily {
+                merged[family] = max(until, merged[family] ?? .distantPast)
+            }
+            reading.modelRefusedUntil = merged.isEmpty ? nil : merged
+        }
+        if !clearAccountWide, let until = previous?.refusedUntil, until > now {
             reading.refusedUntil = max(until, reading.refusedUntil ?? .distantPast)
         }
     }
 
     func observe(_ member: String, _ headers: [(String, String)], status: Int, borrowed: Bool,
-                 model: String?, recheck: UUID? = nil, now: Date = Date()) -> PoolPolicy.Outcome {
+                 model: String?, recheck: UUID? = nil, staleProbe: UUID? = nil,
+                 now: Date = Date()) -> PoolPolicy.Outcome {
         let key = accountKey(member)
+        let succeeded = (200..<300).contains(status)
+        let probeAnswered = succeeded || status == 429
         // Discard the old forecast only when the provider has answered the
-        // requested recheck with fresh allowance evidence.
-        if let recheck, case .sending(recheck) = fableRechecks[key],
-           (200..<300).contains(status) || status == 429 {
+        // requested recheck or stale probe with fresh allowance evidence.
+        if let recheck, case .sending(recheck) = fableRechecks[key], probeAnswered {
             limits[key]?.fableRefusedUntil = nil
         }
+        if let staleProbe, case .sending(staleProbe) = staleProbes[key], probeAnswered {
+            limits[key]?.clearRefusals(for: model)
+        }
         let previous = limits[key]
-        if var parsed = PoolLimits.parse(headers, now: now, model: model) {
+        if var parsed = PoolLimits.parse(headers, now: now, model: model, rateLimited: status == 429) {
             // Refusals sometimes omit one or both regular usage figures.
             // Missing data must not reopen an exhausted general window.
             let names = Set(headers.map { $0.0.lowercased() })
@@ -399,21 +485,32 @@ actor PoolState {
                     parsed.weekReset = parsed.weekReset ?? previous.weekReset
                 }
             }
-            preserveCooldowns(in: &parsed, from: previous, now: now)
+            preserveCooldowns(in: &parsed, from: previous, now: now,
+                              clearingModel: succeeded ? model : nil,
+                              clearAccountWide: succeeded)
             limits[key] = parsed
+        } else if succeeded {
+            limits[key]?.clearRefusals(for: model)
+            limits[key]?.observed = now
         }
         let outcome = PoolPolicy.outcome(status: status, headers: headers, borrowed: borrowed,
                                          now: now, model: model)
         switch outcome {
         case .deliver, .refusedForAccount:
             break
-        case .exhausted(let until), .fableExhausted(let until):
+        case .exhausted(let until), .fableExhausted(let until), .modelExhausted(_, let until):
             var known = limits[key]
                 ?? PoolLimits(fiveHour: 0, fiveHourReset: nil, week: 0, weekReset: nil,
                               refusedUntil: nil, observed: now)
-            if case .fableExhausted = outcome {
+            known.observed = now
+            switch outcome {
+            case .fableExhausted:
                 known.fableRefusedUntil = max(until, known.fableRefusedUntil ?? .distantPast)
-            } else {
+            case .modelExhausted(let family, _):
+                var map = known.modelRefusedUntil ?? [:]
+                map[family] = max(until, map[family] ?? .distantPast)
+                known.modelRefusedUntil = map
+            default:
                 known.refusedUntil = max(until, known.refusedUntil ?? .distantPast)
             }
             limits[key] = known

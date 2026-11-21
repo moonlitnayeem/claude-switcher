@@ -5944,6 +5944,34 @@ do {
     check(PoolPolicy.outcome(status: 429, headers: scopedHeaders + [(prefix + "representative-claim", "overage")],
                              borrowed: true, now: now, model: fable) == .exhausted(until: now + day),
           "an explicit general billing refusal holds the entire account")
+    let mythos = "claude-mythos-5-2"
+    let mythosIncluded = PoolLimits.parse(scopedHeaders, now: now, model: mythos)
+    check(mythosIncluded?.fableRefusedUntil == now + hour && mythosIncluded?.refusedUntil == nil,
+          "Mythos shares the included-allowance refusal window without holding the whole account")
+    check(!PoolPolicy.hasRoom(mythosIncluded, now: now, model: mythos)
+          && PoolPolicy.hasRoom(mythosIncluded, now: now, model: "claude-opus-5-5"),
+          "an included-allowance hold blocks Mythos while keeping Opus on the account")
+    let mythosScoped = PoolLimits.parse([
+        (prefix + "status", "rejected"), (prefix + "7d-status", "allowed"),
+        (prefix + "7d-utilization", "0.67"), (prefix + "7d_mythos-status", "rejected"),
+        (prefix + "7d_mythos-reset", stamp(2 * hour)), (prefix + "reset", stamp(day)),
+    ], now: now, model: mythos, rateLimited: true)
+    check(mythosScoped?.modelRefusedUntil?["mythos"] == now + 2 * hour && mythosScoped?.refusedUntil == nil,
+          "a dedicated Mythos bucket refusal tracks only Mythos with its own reset")
+    check(!PoolPolicy.hasRoom(mythosScoped, now: now, model: mythos)
+          && PoolPolicy.hasRoom(mythosScoped, now: now, model: fable)
+          && PoolPolicy.hasRoom(mythosScoped, now: now, model: "claude-opus-5-5"),
+          "a dedicated Mythos bucket refusal leaves other models eligible")
+    let staleBackup = PoolLimits(fiveHour: 0.03, fiveHourReset: now - hour, week: 0.99,
+                                 weekReset: now + 4 * day, refusedUntil: nil, observed: now - day)
+    var withFableHold = staleBackup
+    withFableHold.fableRefusedUntil = now + 4 * day
+    let pageReset = IncludedAllowanceReading(weeklyUsed: 0, includedUsed: 0, observed: now - 60)
+    let corrected = pageReset.corrected(withFableHold, now: now)
+    check(corrected.week == 0 && corrected.fableRefusedUntil == nil
+          && PoolPolicy.hasRoom(corrected, now: now, model: fable)
+          && PoolPolicy.hasRoom(corrected, now: now, model: mythos),
+          "a newer verified usage-page reset clears a stale 99% weekly and included-allowance hold")
     check(PoolPolicy.outcome(status: 401, headers: [], borrowed: true, now: now) == .loginRefused,
           "a borrowed login that is refused is not lent again")
     check(PoolPolicy.outcome(status: 401, headers: [], borrowed: false, now: now) == .deliver,

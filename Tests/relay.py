@@ -798,6 +798,86 @@ check(response.status == 200 and payload == b"".join(STREAM) and [w["token"] for
       and not recheck_pending(control({})), "the client's full new thread reaches the lender and completes the recheck")
 check_model_route(fable_model, [lender], "a successful thread restart reopens the lender for Fable")
 
+# Automatic failover for both Fable 5.2 and Mythos 5.2 in the same chat when
+# the main account hits a model limit and the backup holds a stale yesterday
+# observation (99% weekly + old Fable refusal) after an early provider reset.
+mythos_model = "claude-mythos-5-2"
+for label, model_name, main_rejection, thread_id in [
+    ("Fable 5.2", fable_model, {"7d-status": "allowed", "7d_oi-status": "rejected"}, "stale-fable-msg"),
+    ("Mythos 5.2 (included)", mythos_model, {"7d-status": "allowed", "representative-claim": "seven_day_overage_included"}, "stale-mythos-inc"),
+    ("Mythos 5.2 (scoped)", mythos_model, {"7d-status": "allowed", "7d_mythos-status": "rejected", "7d_mythos-reset": str(int(now + 86400))}, "stale-mythos-scoped"),
+]:
+    m_id, b_id = "auto-main-" + thread_id, "auto-backup-" + thread_id
+    m_tok, b_tok = "tok-" + m_id, "tok-" + b_id
+    accounts[m_tok] = {"5h": 0.0, "7d": 0.68, "7d-reset": now + 6 * 86400, "reject": False}
+    accounts[b_tok] = {"5h": 0.0, "7d": 0.0, "7d-reset": now + 4 * 86400, "reject": False}
+    stale_limits = {
+        "fiveHour": 0.03,
+        "fiveHourReset": (now - 3600) - 978307200,
+        "week": 0.99,
+        "weekReset": (now + 4 * 86400) - 978307200,
+        "fableRefusedUntil": (now + 4 * 86400) - 978307200,
+        "observed": (now - 19 * 3600) - 978307200,
+    }
+    control({"configure": {"enabled": True, "members": [
+        dict(member(m_id, m_tok, borrows=[b_id]), limits=pushed(now + 6 * 86400)),
+        dict(member(b_id, b_tok), limits=stale_limits),
+    ]}}, production_order=True)
+    create_body = threaded("create").replace(b"claude-opus-5-5", model_name.encode())
+    cont_body = threaded("continue", thread_id).replace(b"claude-opus-5-5", model_name.encode())
+    # Turn 1: primary starts the conversation automatically.
+    response, payload, went = ask_thread(m_tok, "sess-" + thread_id, create_body)
+    check(response.status == 200 and [w["token"] for w in went] == [m_tok],
+          label + " starts on the main account automatically")
+    threads[thread_id] = m_tok
+    # Now main reaches its model limit while backup has already reset to 0%.
+    accounts[m_tok]["model_rejections"] = {model_name: main_rejection}
+    # Turn 2: continuing thread hits main (429), automatically probes stale backup -> 404 thread_not_found.
+    response, payload, went = ask_thread(m_tok, "sess-" + thread_id, cont_body)
+    check(response.status == 404 and b"thread_not_found" in payload and [w["token"] for w in went] == [m_tok, b_tok],
+          label + " probes a stale backup on main 429 and returns thread_not_found so the chat restarts seamlessly")
+    # Client immediately resends full history as a new thread in the same chat -> backup answers 200.
+    response, payload, went = ask_thread(m_tok, "sess-" + thread_id, create_body)
+    check(response.status == 200 and payload == b"".join(STREAM) and [w["token"] for w in went] == [b_tok],
+          label + " completes the same turn on the backup account with the same model")
+    threads["backup-" + thread_id] = b_tok
+    # Turn 3: subsequent turn continues on backup without another 404.
+    cont_backup = threaded("continue", "backup-" + thread_id).replace(b"claude-opus-5-5", model_name.encode())
+    response, payload, went = ask_thread(m_tok, "sess-" + thread_id, cont_backup)
+    check(response.status == 200 and [w["token"] for w in went] == [b_tok],
+          label + " stays on the backup for the next turn in the same chat")
+    # Opus remains unaffected on main (main was NOT marked account-wide refused).
+    opus_body = b'{"model":"claude-opus-5-5","messages":[{"role":"user","content":"hi"}]}'
+    response, _, went = ask(conn, m_tok, session=None, body=opus_body)
+    check(response.status == 200 and [w["token"] for w in went] == [m_tok],
+          label + " limit on main leaves Opus on main untouched")
+    # Backup's cached limits are now refreshed to 0% with no stale Fable refusal.
+    backup_state = next(row for row in control({})["members"] if row["id"] == b_id)
+    check(backup_state["limits"]["week"] == 0.0 and backup_state["limits"].get("fableRefusedUntil") is None,
+          label + " backup answer refreshes its cached weekly and Fable limits")
+
+# A stale backup that is genuinely still exhausted is probed once, then left alone.
+exhausted_m, exhausted_b = "tok-both-full-main", "tok-both-full-backup"
+accounts[exhausted_m] = {"5h": 0.0, "7d": 0.68, "7d-reset": now + 6 * 86400, "reject": False,
+                         "model_rejections": {fable_model: {"7d-status": "allowed", "7d_oi-status": "rejected"}}}
+accounts[exhausted_b] = {"5h": 0.0, "7d": 0.99, "7d-reset": now + 4 * 86400, "reject": False,
+                         "model_rejections": {fable_model: {"7d-status": "allowed", "7d_oi-status": "rejected"}}}
+control({"configure": {"enabled": True, "members": [
+    dict(member("both-main", exhausted_m, borrows=["both-backup"]), limits=pushed(now + 6 * 86400)),
+    dict(member("both-backup", exhausted_b), limits={
+        "fiveHour": 0.0, "week": 0.99, "weekReset": (now + 4 * 86400) - 978307200,
+        "fableRefusedUntil": (now + 4 * 86400) - 978307200,
+        "observed": (now - 19 * 3600) - 978307200,
+    }),
+]}}, production_order=True)
+fable_body = b'{"model":"claude-fable-5-2","messages":[{"role":"user","content":"hi"}]}'
+response, _, went = ask(conn, exhausted_m, session=None, body=fable_body)
+check(response.status == 429 and [w["token"] for w in went] == [exhausted_m, exhausted_b, exhausted_m],
+      "a stale backup that is still limited is probed once and falls back to main")
+response, _, went = ask(conn, exhausted_m, session=None, body=fable_body)
+check(response.status == 429 and [w["token"] for w in went] == [exhausted_m],
+      "a freshly re-confirmed full backup is not spammed on the very next turn")
+
 thread_pool("G", "H", 95)
 response, payload, went = ask_thread("tok-H", "s40", threaded("create"))
 check([w["token"] for w in went] == ["tok-G"], "a new thread goes where the ranking says")

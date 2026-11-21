@@ -125,19 +125,24 @@ final class Exchange {
 
         // A connection can carry successive requests, and several profiles can stream concurrently.
         let requestID = UUID()
-        defer { Task { await self.state.finishRequest(requestID) } }
+        defer {
+            Task {
+                await self.state.finishRequest(requestID)
+                for attempt in attempts {
+                    if let ticket = attempt.fableRecheck, let member = attempt.member {
+                        await self.state.finishFableRecheck(member, ticket: ticket)
+                    }
+                    if let ticket = attempt.staleProbe, let member = attempt.member {
+                        await self.state.finishStaleProbe(member, ticket: ticket)
+                    }
+                }
+            }
+        }
         var passed: [PoolPass] = []
         var primaryRefusal: (answer: (head: HTTPHead, raw: Data), body: Data)?
         var index = 0
         while index < attempts.count {
             let attempt = attempts[index]
-            defer {
-                // Transport errors and interrupted responses must release a
-                // claimed recheck as well as the normal response paths.
-                if let ticket = attempt.fableRecheck, let member = attempt.member {
-                    Task { await self.state.finishFableRecheck(member, ticket: ticket) }
-                }
-            }
             let last = index == attempts.count - 1
             let borrowed = attempt.token != nil
             // If all backups failed after an explicit recheck, return the original
@@ -163,6 +168,10 @@ final class Exchange {
             } catch {
                 connection?.close()
                 connection = nil
+                if let member = attempt.member {
+                    if let ticket = attempt.fableRecheck { await state.finishFableRecheck(member, ticket: ticket) }
+                    if let ticket = attempt.staleProbe { await state.finishStaleProbe(member, ticket: ticket) }
+                }
                 if last {
                     try? await client.send(HTTPMessage.failure(
                         502, "Bad Gateway", "The relay could not reach \(UsagePool.host): \(error.localizedDescription)"))
@@ -176,7 +185,9 @@ final class Exchange {
             let status = answer.head.status ?? 502
             if let member = attempt.member {
                 let outcome = await state.observe(member, answer.head.pairs, status: status,
-                                                  borrowed: borrowed, model: model, recheck: attempt.fableRecheck)
+                                                  borrowed: borrowed, model: model,
+                                                  recheck: attempt.fableRecheck,
+                                                  staleProbe: attempt.staleProbe)
                 if status == 404, continuing, (outcome == .refusedForAccount && !last || attempt.fableRecheck != nil),
                    let refusalBody = try await threadRefusal(answer, method: head.method) {
                     let missing = refusalBody.range(of: PoolRequest.threadMissing) != nil
@@ -188,6 +199,10 @@ final class Exchange {
                             await state.finishFableRecheck(member, ticket: ticket, newThreadFor: session,
                                                          threadMissing: missing)
                         }
+                        if let ticket = attempt.staleProbe {
+                            await state.finishStaleProbe(member, ticket: ticket, newThreadFor: session,
+                                                         model: model, threadMissing: missing)
+                        }
                         await state.served(by: member, from: own, session: session, status: status,
                                            passedOver: passed, model: model,
                                            cacheLifetime: PoolPolicy.cacheLifetime(of: body), threaded: true,
@@ -197,6 +212,7 @@ final class Exchange {
                     }
                 }
                 if let ticket = attempt.fableRecheck { await state.finishFableRecheck(member, ticket: ticket) }
+                if let ticket = attempt.staleProbe { await state.finishStaleProbe(member, ticket: ticket) }
                 if outcome != .deliver, !last {
                     if !borrowed, attempt.fableRecheck != nil, status == 429, let up = connection,
                        let refusalBody = try? await up.readBody(answer.head.responseBody(to: head.method), limit: 64 * 1024) {
@@ -207,7 +223,7 @@ final class Exchange {
                     connection?.close()
                     connection = nil
                     switch outcome {
-                    case .exhausted, .fableExhausted:
+                    case .exhausted, .fableExhausted, .modelExhausted:
                         passed.append(PoolPass(id: member, reason: .full))
                         index += 1
                     case .loginRefused:
@@ -225,6 +241,7 @@ final class Exchange {
                     var noted: [String: Any] = ["member": member, "status": status,
                                                 "reason": passed.last!.reason.rawValue]
                     if case .fableExhausted = outcome { noted["limitScope"] = "fable" }
+                    if case .modelExhausted(let family, _) = outcome { noted["limitScope"] = family }
                     if case .exhausted = outcome { noted["limitScope"] = "account" }
                     if continuing { noted["thread"] = "continue" }
                     if let refusal { noted["error"] = refusal }

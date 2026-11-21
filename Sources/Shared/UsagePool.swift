@@ -81,9 +81,33 @@ struct PoolLimits: Codable, Equatable {
     var weekReset: Date?
     /// Set when the service said no outright, until the time it named.
     var refusedUntil: Date?
-    /// Included Fable usage can run out while other models still have room.
+    /// Included weekly allowance (Fable and Mythos) can run out while other models still have room.
     var fableRefusedUntil: Date?
+    /// Per-model-family rate-limit cooldowns when overall windows remain open.
+    var modelRefusedUntil: [String: Date]? = nil
     var observed: Date
+
+    func refusedUntil(for model: String?) -> Date? {
+        var deadlines: [Date] = []
+        if PoolRequest.usesIncludedAllowance(model), let fableRefusedUntil {
+            deadlines.append(fableRefusedUntil)
+        }
+        if let family = PoolRequest.modelFamily(model), let scoped = modelRefusedUntil?[family] {
+            deadlines.append(scoped)
+        }
+        return deadlines.max()
+    }
+
+    mutating func clearRefusals(for model: String?) {
+        refusedUntil = nil
+        if PoolRequest.usesIncludedAllowance(model) {
+            fableRefusedUntil = nil
+        }
+        if let family = PoolRequest.modelFamily(model) {
+            modelRefusedUntil?[family] = nil
+            if modelRefusedUntil?.isEmpty == true { modelRefusedUntil = nil }
+        }
+    }
 
     /// Every answer from `/v1/messages` carries the account's unified limits,
     /// so the relay learns an account's state from the very requests it sends
@@ -104,12 +128,29 @@ struct PoolLimits: Codable, Equatable {
         let status = value(prefix + "status")
         let fiveRejected = value(prefix + "5h-status") == "rejected"
         let weekRejected = value(prefix + "7d-status") == "rejected"
+        let weekExplicitlyAllowed = value(prefix + "7d-status") == "allowed"
         let fableRejected = value(prefix + "7d_oi-status") == "rejected"
         let claim = value(prefix + "representative-claim")
-        let fableOnly = PoolRequest.isFable(model) && !fiveRejected && !weekRejected
+        let rejectedScopedBuckets: [String] = headers.compactMap { pair in
+            let lower = pair.0.lowercased()
+            guard lower.hasPrefix(prefix), lower.hasSuffix("-status"),
+                  pair.1.lowercased() == "rejected" else { return nil }
+            let bucket = String(lower.dropFirst(prefix.count).dropLast("-status".count))
+            guard !bucket.isEmpty, bucket != "5h", bucket != "7d" else { return nil }
+            return bucket
+        }
+        let generalClaim = claim == "five_hour" || claim == "seven_day" || claim == "overage" || claim == "extra_usage"
+        let overallRejected = fiveRejected || weekRejected || generalClaim
+        // Fable and Mythos share this included window. Treating a Mythos
+        // refusal as the whole account also closes models that still have room.
+        let fableOnly = PoolRequest.usesIncludedAllowance(model) && !overallRejected
             && (claim == "seven_day_overage_included" || (claim == nil && fableRejected))
+        let scopedClaim = claim.map { $0.hasPrefix("seven_day_") || $0.hasPrefix("five_hour_") } == true
+        let modelOnly = !fableOnly && !overallRejected && model != nil
+            && (scopedClaim || !rejectedScopedBuckets.isEmpty
+                || (rateLimited && claim == nil && weekExplicitlyAllowed && (five ?? 0) < 1 && (week ?? 0) < 1))
         let rejected = rateLimited || status == "rejected" || fiveRejected || weekRejected
-            || (fableOnly && fableRejected)
+            || (fableOnly && fableRejected) || (!overallRejected && !rejectedScopedBuckets.isEmpty)
         guard five != nil || week != nil || status != nil || rejected else { return nil }
         var limits = PoolLimits(fiveHour: five ?? 0,
                                 fiveHourReset: date(prefix + "5h-reset"),
@@ -123,6 +164,8 @@ struct PoolLimits: Codable, Equatable {
             let windowReset: Date?
             if fableOnly {
                 windowReset = date(prefix + "7d_oi-reset")
+            } else if modelOnly {
+                windowReset = rejectedScopedBuckets.compactMap { date(prefix + $0 + "-reset") }.max()
             } else {
                 let fiveReset = (fiveRejected || claim == "five_hour") ? limits.fiveHourReset : nil
                 let weekReset = (weekRejected || claim == "seven_day") ? limits.weekReset : nil
@@ -133,6 +176,8 @@ struct PoolLimits: Codable, Equatable {
             let until = windowReset ?? date(prefix + "reset") ?? now.addingTimeInterval(wait)
             if fableOnly {
                 limits.fableRefusedUntil = until
+            } else if modelOnly, let family = PoolRequest.modelFamily(model) {
+                limits.modelRefusedUntil = [family: until]
             } else {
                 limits.refusedUntil = until
             }
@@ -157,6 +202,76 @@ struct PoolLimits: Codable, Equatable {
         self.weekReset = weekReset
         self.refusedUntil = refusedUntil
         self.observed = observed
+    }
+}
+
+// MARK: - Usage-page reading corrections
+
+/// A usage page saved for the dashboard. The relay keeps its own forecast, and
+/// this is how a newer page reading replaces one left over from before a reset.
+struct IncludedAllowanceReading: Equatable {
+    var weeklyUsed: Double?
+    var includedUsed: Double?
+    var observed: Date
+
+    /// Fractions, not percentages. A page that omits a window leaves it alone.
+    /// A reading taken after the relay's own observation wins for a day and a
+    /// half, which is long enough to outlast the forecast it corrects.
+    func corrected(_ limits: PoolLimits, now: Date) -> PoolLimits {
+        guard observed <= now.addingTimeInterval(1), observed > limits.observed else { return limits }
+        let age = now.timeIntervalSince(observed)
+        guard age < 36 * 60 * 60 else { return limits }
+        var updated = limits
+        updated.observed = observed
+        if let weeklyUsed, (0...1).contains(weeklyUsed) { updated.week = weeklyUsed }
+        if let includedUsed, (0..<1).contains(includedUsed) {
+            updated.fableRefusedUntil = nil
+            updated.modelRefusedUntil?["fable"] = nil
+            updated.modelRefusedUntil?["mythos"] = nil
+            if updated.modelRefusedUntil?.isEmpty == true { updated.modelRefusedUntil = nil }
+            if updated.refusedUntil == limits.fableRefusedUntil,
+               updated.fiveHour < PoolPolicy.fiveHourCeiling,
+               updated.week < PoolPolicy.weekCeiling {
+                updated.refusedUntil = nil
+            }
+        }
+        return updated
+    }
+}
+
+enum IncludedAllowancePage {
+    static let sources: Set<String> = ["Claude usage page", "Copied from Claude"]
+
+    static func accountUUID(in identifier: String) -> String? {
+        let token = identifier.split(separator: ":").last.map(String.init) ?? identifier
+        guard UUID(uuidString: token) != nil else { return nil }
+        return token.lowercased()
+    }
+
+    static func load(account: String, from directory: URL, now: Date = Date()) -> IncludedAllowanceReading? {
+        guard let uuid = accountUUID(in: account) else { return nil }
+        let url = directory.appending(path: uuid + ".json")
+        guard let data = try? Data(contentsOf: url),
+              let saved = try? JSONDecoder().decode(FileReading.self, from: data) else { return nil }
+        func metric(_ value: FileReading.Metric?) -> (Double, Date)? {
+            guard let value, sources.contains(value.source), (0...100).contains(value.percent),
+                  value.observedAt <= now.addingTimeInterval(1) else { return nil }
+            return (Double(value.percent) / 100, value.observedAt)
+        }
+        let weekly = metric(saved.weekly)
+        let included = metric(saved.fable)
+        guard let observed = [weekly?.1, included?.1].compactMap({ $0 }).max() else { return nil }
+        return IncludedAllowanceReading(weeklyUsed: weekly?.0, includedUsed: included?.0, observed: observed)
+    }
+
+    private struct FileReading: Decodable {
+        struct Metric: Decodable {
+            var percent: Int
+            var observedAt: Date
+            var source: String
+        }
+        var weekly: Metric?
+        var fable: Metric?
     }
 }
 
@@ -208,10 +323,24 @@ enum PoolPolicy {
     static func hasRoom(_ limits: PoolLimits?, now: Date, model: String? = nil,
                         useMargin: Bool = false) -> Bool {
         guard let limits else { return true }
-        if let until = limits.refusedUntil, until > now { return false }
-        if PoolRequest.isFable(model), let until = limits.fableRefusedUntil, until > now { return false }
+        // A Mythos refusal used to be stored as an account-wide hold at the
+        // same instant as the included-window hold, while the week and the
+        // five-hour window were still open. That copy must not move Opus off
+        // the account that still has those windows.
+        if let until = limits.refusedUntil, until > now,
+           !misfiledIncludedHold(limits, model: model) { return false }
+        if let until = limits.refusedUntil(for: model), until > now { return false }
         if limits.fiveHour >= (useMargin ? fiveHourCeiling : 1), (limits.fiveHourReset ?? .distantFuture) > now { return false }
         if limits.week >= (useMargin ? weekCeiling : 1), (limits.weekReset ?? .distantFuture) > now { return false }
+        return true
+    }
+
+    /// The included-window hold was copied into the general hold. The unified
+    /// windows themselves still have room, so models outside that window do too.
+    static func misfiledIncludedHold(_ limits: PoolLimits, model: String?) -> Bool {
+        guard !PoolRequest.usesIncludedAllowance(model),
+              let until = limits.refusedUntil, limits.fableRefusedUntil == until,
+              limits.fiveHour < fiveHourCeiling, limits.week < weekCeiling else { return false }
         return true
     }
 
@@ -251,6 +380,7 @@ enum PoolPolicy {
         /// The account has no room. Try the next one.
         case exhausted(until: Date)
         case fableExhausted(until: Date)
+        case modelExhausted(family: String, until: Date)
         /// A borrowed token was refused. It is not offered again until Graft
         /// hands over a different one.
         case loginRefused
@@ -265,6 +395,10 @@ enum PoolPolicy {
         case 429:
             let limits = PoolLimits.parse(headers, now: now, model: model, rateLimited: true)
             if let until = limits?.fableRefusedUntil { return .fableExhausted(until: until) }
+            if let family = PoolRequest.modelFamily(model),
+               let until = limits?.modelRefusedUntil?[family] {
+                return .modelExhausted(family: family, until: until)
+            }
             return .exhausted(until: limits?.refusedUntil ?? now.addingTimeInterval(60))
         case 401:
             return borrowed ? .loginRefused : .deliver
@@ -283,6 +417,22 @@ enum PoolPolicy {
 enum PoolRequest {
     static func isFable(_ model: String?) -> Bool {
         model?.lowercased().hasPrefix("claude-fable-") == true
+    }
+
+    /// The provider's included weekly window. Desktop reports it as the Fable
+    /// limit for both Fable and Mythos requests.
+    static func usesIncludedAllowance(_ model: String?) -> Bool {
+        guard let name = model?.lowercased() else { return false }
+        return name.hasPrefix("claude-fable-") || name.hasPrefix("claude-mythos-")
+    }
+
+    static func modelFamily(_ model: String?) -> String? {
+        guard let raw = model?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !raw.isEmpty else { return nil }
+        for family in ["fable", "mythos", "opus", "sonnet", "haiku"] {
+            if raw == "claude-\(family)" || raw.hasPrefix("claude-\(family)-") { return family }
+        }
+        return raw
     }
 
     /// The one request worth moving. `count_tokens` and everything under
