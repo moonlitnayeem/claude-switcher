@@ -116,3 +116,63 @@ precondition(ClaudeAccountLabels(scope: "graft", defaults: prefs).nickname(for: 
 print("Local account labels survive relaunch, preserve the other mode, and clear without changing accounts")
 
 try checkClaudeUsageDisplay(in: root.appending(path: "display-fixture"))
+
+// Backup Chat/Cowork profile app matching: matches by account UUID or unsigned-in email, never unrelated bundles.
+do {
+    let chatRoot = root.appending(path: "chat-profile-fixture")
+    let appsDir = chatRoot.appending(path: "Apps")
+    let profilesDir = chatRoot.appending(path: "profiles")
+    let graftDir = chatRoot.appending(path: "ClaudeGraft")
+    let fm = FileManager.default
+    try fm.createDirectory(at: appsDir, withIntermediateDirectories: true)
+    try fm.createDirectory(at: profilesDir.appending(path: "Claude-backup"), withIntermediateDirectories: true)
+    try fm.createDirectory(at: profilesDir.appending(path: "Claude-other"), withIntermediateDirectories: true)
+    try fm.createDirectory(at: graftDir.appending(path: "pool"), withIntermediateDirectories: true)
+
+    let backupUUID = UUID()
+    let otherUUID = UUID()
+    let backupShortcutID = UUID()
+    let otherShortcutID = UUID()
+
+    // Install a Graft shortcut bundle for Claude-backup (unsigned-in yet -> matched by email).
+    let backupApp = appsDir.appending(path: "backup@example.org.app")
+    try fm.createDirectory(at: backupApp.appending(path: "Contents/Resources"), withIntermediateDirectories: true)
+    let backupConfig = try JSONEncoder().encode(GraftConfig(profileDir: profilesDir.appending(path: "Claude-backup").path))
+    try backupConfig.write(to: backupApp.appending(path: "Contents/Resources/graft.json"))
+
+    // Install a shortcut for Claude-other signed into otherUUID with a misleading name matching backup's email.
+    let otherApp = appsDir.appending(path: "Other.app")
+    try fm.createDirectory(at: otherApp.appending(path: "Contents/Resources"), withIntermediateDirectories: true)
+    let otherConfig = try JSONEncoder().encode(GraftConfig(profileDir: profilesDir.appending(path: "Claude-other").path))
+    try otherConfig.write(to: otherApp.appending(path: "Contents/Resources/graft.json"))
+    try Data("{\"lastKnownAccountUuid\":\"\(otherUUID.uuidString)\"}".utf8)
+        .write(to: profilesDir.appending(path: "Claude-other/config.json"))
+
+    // Write usage-sharing, pool/accounts.json, and shortcuts.json.
+    try Data("{\"lenders\":{\"main\":[\"account:\(backupUUID.uuidString)\"]},\"assignments\":{}}".utf8)
+        .write(to: graftDir.appending(path: "usage-sharing.json"))
+    try Data("[{\"id\":\"account:\(backupUUID.uuidString)\",\"accountUuid\":\"\(backupUUID.uuidString)\",\"email\":\"backup@example.org\"}]".utf8)
+        .write(to: graftDir.appending(path: "pool/accounts.json"))
+    let shortcutsJSON = """
+    [
+      {"id":"\(otherShortcutID.uuidString)","name":"backup@example.org","installedName":"Other","folder":"Claude-other"},
+      {"id":"\(backupShortcutID.uuidString)","name":"backup@example.org","installedName":"backup@example.org","folder":"Claude-backup"}
+    ]
+    """
+    try Data(shortcutsJSON.utf8).write(to: graftDir.appending(path: "shortcuts.json"))
+
+    let chatConn = GraftConnection(root: graftDir, profileRoot: profilesDir, appDirectories: [appsDir])
+    let snap = chatConn.read()
+    let backupKey = "account:\(backupUUID.uuidString)"
+    precondition(snap.chatProfileApp(for: "main", from: "main") == nil)
+    precondition(snap.chatProfileApp(for: backupKey, from: "main").map { Graft.samePath($0, backupApp) } == true)
+
+    // Once signed in with backupUUID, UUID matching takes priority even if renamed.
+    try Data("{\"lastKnownAccountUuid\":\"\(backupUUID.uuidString)\"}".utf8)
+        .write(to: profilesDir.appending(path: "Claude-backup/config.json"))
+    let renamedApp = appsDir.appending(path: "Backup Renamed.app")
+    try fm.moveItem(at: backupApp, to: renamedApp)
+    let snapSignedIn = chatConn.read()
+    precondition(snapSignedIn.chatProfileApp(for: backupKey, from: "main").map { Graft.samePath($0, renamedApp) } == true)
+    print("Backup Chat/Cowork profile lookup resolves unsigned-in email matches and signed-in renamed bundles safely")
+}

@@ -761,3 +761,11 @@
 "Missing from pasted text" = "Missing from pasted text";
 "Graft usage report" = "Graft usage report";
 "Remove the readings you saved here. Readings reported by Graft can still appear." = "Remove the readings you saved here. Readings reported by Graft can still appear.";
+"Main reached its Fable limit" = "Main reached its Fable limit";
+"Claude Code switches automatically. Open your backup profile for Chat and Cowork." = "Claude Code switches automatically. Open your backup profile for Chat and Cowork.";
+"Open Chat/Cowork on backup" = "Open Chat/Cowork on backup";
+"Open Chat/Cowork" = "Open Chat/Cowork";
+"Open %@ in a separate Claude window for Chat and Cowork." = "Open %@ in a separate Claude window for Chat and Cowork.";
+"Open Chat and Cowork on backup %@" = "Open Chat and Cowork on backup %@";
+"No installed Claude profile was found for this backup account." = "No installed Claude profile was found for this backup account.";
+"The backup Claude profile could not be opened." = "The backup Claude profile could not be opened.";

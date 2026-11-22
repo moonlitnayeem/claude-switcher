@@ -26,6 +26,7 @@ struct GraftConnectionView: View {
                      set: { setMode($0 ? nil : key, for: key) }), canSwitch: canSet && !changingMode,
                      refresh: refreshStatus, recheck: { member in recheck(member, profile: key) },
                      useOnly: { setMode($0, for: key) },
+                     openChatProfile: { openBackupChatProfile($0, profile: key) },
                      renameAccount: { id in labelTarget = ClaudeLabelTarget(id: id, name: accountName(id, profile: key)) },
                      updateUsage: { id in
                          guard let account = snapshot.accountUUIDs[id] else { return }
@@ -119,6 +120,7 @@ struct GraftConnectionView: View {
                                             canUpdateUsage: identity != nil)
             row.nickname = labels.nickname(for: id)
             row.canSelect = snapshot.canSelectAccount(id, for: profile)
+            row.canOpenChatProfile = snapshot.chatProfileApp(for: id, from: profile) != nil
             row.needsAttention = report?.tokenRefused == true || usage?.weekly?.percent == 100
             if let reset = limits?.fableRefusedUntil, reset > now { row.fableReset = reset }
             row.canRecheck = !rechecking && snapshot.canRecheck(id, from: profile)
@@ -275,6 +277,22 @@ struct GraftConnectionView: View {
             rechecking = false
             if !queued {
                 message = L10n.text("The relay could not queue this Fable check. Refresh to see the latest account status.")
+            }
+        }
+    }
+
+    private func openBackupChatProfile(_ id: String, profile: String) {
+        guard let app = snapshot.chatProfileApp(for: id, from: profile) else {
+            message = L10n.text("No installed Claude profile was found for this backup account.")
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: app, configuration: configuration) { _, error in
+            if error != nil {
+                DispatchQueue.main.async {
+                    message = L10n.text("The backup Claude profile could not be opened.")
+                }
             }
         }
     }

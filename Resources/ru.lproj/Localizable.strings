@@ -761,3 +761,11 @@
 "Missing from pasted text" = "Нет во вставленном тексте";
 "Graft usage report" = "Отчёт об использовании Graft";
 "Remove the readings you saved here. Readings reported by Graft can still appear." = "Удалить сохранённые здесь данные. Показания из отчёта Graft могут по-прежнему отображаться.";
+"Main reached its Fable limit" = "Основной аккаунт исчерпал лимит Fable";
+"Claude Code switches automatically. Open your backup profile for Chat and Cowork." = "Claude Code переключается автоматически. Для чатов и Cowork откройте резервный профиль.";
+"Open Chat/Cowork on backup" = "Открыть чат/Cowork на резервном";
+"Open Chat/Cowork" = "Открыть чат/Cowork";
+"Open %@ in a separate Claude window for Chat and Cowork." = "Открыть %@ в отдельном окне Claude для чатов и Cowork.";
+"Open Chat and Cowork on backup %@" = "Открыть чат и Cowork на резервном аккаунте %@";
+"No installed Claude profile was found for this backup account." = "Для этого резервного аккаунта не найден установленный профиль Claude.";
+"The backup Claude profile could not be opened." = "Не удалось открыть резервный профиль Claude.";

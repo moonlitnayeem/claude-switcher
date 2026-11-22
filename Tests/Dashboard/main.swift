@@ -124,6 +124,27 @@ precondition(OrbitFrame(at: tick.addingTimeInterval(8), moving: true, signal: an
 precondition(RoutingDashboard.modelName("claude-fable-5-2") == "Fable 5.2")
 precondition(RoutingDashboard.modelName("claude-mythos-5-2") == "Mythos 5.2")
 precondition(RoutingDashboard.modelName("custom-model") == "custom-model")
+do {
+    let now = Date()
+    var mainOK = RoutingAccountDisplay(id: "main", name: "main@example.org", isPrimary: true, state: "Signed in",
+                                       fable: RoutingUsageMetric(percent: 40, observedAt: now, source: "Graft relay"))
+    let backupFull = RoutingAccountDisplay(id: "b1", name: "full@example.org", isPrimary: false, state: "Signed in",
+                                           fable: RoutingUsageMetric(percent: 100, observedAt: now, source: "Graft relay"),
+                                           canOpenChatProfile: true)
+    let backupReady = RoutingAccountDisplay(id: "b2", name: "ready@example.org", isPrimary: false, state: "Signed in",
+                                            fable: RoutingUsageMetric(percent: 70, observedAt: now, source: "Graft relay"),
+                                            canOpenChatProfile: true)
+    let okDisplay = RoutingDisplay(title: "Ready", detail: "", accounts: [mainOK, backupFull, backupReady])
+    precondition(!okDisplay.primaryFableLimited)
+    mainOK.fable = RoutingUsageMetric(percent: 100, observedAt: now, source: "Graft relay")
+    let limitedDisplay = RoutingDisplay(title: "Full", detail: "", accounts: [mainOK, backupFull, backupReady])
+    precondition(limitedDisplay.primaryFableLimited && limitedDisplay.preferredBackupChatProfile?.id == "b2")
+    let noProfileDisplay = RoutingDisplay(title: "Full", detail: "", accounts: [
+        mainOK,
+        RoutingAccountDisplay(id: "b3", name: "none@example.org", isPrimary: false, state: "Signed in", canOpenChatProfile: false),
+    ])
+    precondition(noProfileDisplay.preferredBackupChatProfile == nil)
+}
 try MainActor.assumeIsolated {
     try capture("routing-light", dark: false, compact: false)
     try capture("routing-dark", dark: true, compact: false)

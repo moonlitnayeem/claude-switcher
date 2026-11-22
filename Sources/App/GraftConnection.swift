@@ -32,7 +32,17 @@ struct GraftConnection {
     struct Profile: Decodable {
         let id: UUID
         let name: String
+        let installedName: String?
         let folder: String?
+    }
+
+    struct ShortcutProfile: Equatable {
+        let id: String
+        let name: String
+        let installedName: String?
+        let folder: String
+        let accountUUID: UUID?
+        let appURL: URL
     }
 
     struct Assignments: Decodable {
@@ -46,6 +56,7 @@ struct GraftConnection {
         var names: [String: String] = [:]
         var accountLabels: [String: String] = [:]
         var accountUUIDs: [String: UUID] = [:]
+        var shortcutProfiles: [ShortcutProfile] = []
         var chatChoices: [String: String] = [:]
         var status: PoolStatus?
         var settingsFound = false
@@ -125,13 +136,41 @@ struct GraftConnection {
             else { return false }
             return PoolPolicy.hasRoom(limits, now: now)
         }
+
+        func chatProfileApp(for member: String, from profile: String) -> URL? {
+            guard member != profile else { return nil }
+            let candidates = shortcutProfiles.filter { $0.id != profile }
+            if let direct = candidates.first(where: { $0.id == member }) { return direct.appURL }
+            if let uuid = accountUUIDs[member],
+               let matched = candidates.first(where: { $0.accountUUID == uuid }) {
+                return matched.appURL
+            }
+            if let email = email(for: member, from: profile)?
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !email.isEmpty,
+               let byName = candidates.first(where: {
+                   $0.accountUUID == nil &&
+                   ($0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email ||
+                    $0.installedName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email)
+               }) {
+                return byName.appURL
+            }
+            return nil
+        }
     }
 
     let root: URL
     let profileRoot: URL
-    init(root: URL = Graft.applicationSupport.appending(path: Graft.legacyFolderName), profileRoot: URL? = nil) {
+    let appDirectories: [URL]
+    init(root: URL = Graft.applicationSupport.appending(path: Graft.legacyFolderName),
+         profileRoot: URL? = nil,
+         appDirectories: [URL]? = nil) {
         self.root = root
         self.profileRoot = profileRoot ?? root.deletingLastPathComponent()
+        self.appDirectories = appDirectories ?? [
+            URL(fileURLWithPath: "/Applications"),
+            FileManager.default.homeDirectoryForCurrentUser.appending(path: "Applications"),
+        ]
     }
 
     var settingsExist: Bool {
@@ -157,15 +196,54 @@ struct GraftConnection {
             for profile in profiles {
                 let key = profile.id.uuidString
                 result.names[key] = profile.name
-                guard referenced.contains(key), let folder = profile.folder, Graft.validateFolder(folder) == nil else { continue }
+                guard let folder = profile.folder, Graft.validateFolder(folder) == nil else { continue }
                 let directory = profileRoot.appending(path: folder).resolvingSymlinksInPath()
                 guard Graft.samePath(directory.deletingLastPathComponent(), profileRoot) else { continue }
-                result.accountUUIDs[key] = GraftAccountLabel.profileAccount(in: directory)
+                let accountUUID = GraftAccountLabel.profileAccount(in: directory)
+                if referenced.contains(key) { result.accountUUIDs[key] = accountUUID }
+                if let appURL = installedApp(for: profile, profileDirectory: directory) {
+                    result.shortcutProfiles.append(ShortcutProfile(
+                        id: key, name: profile.name, installedName: profile.installedName,
+                        folder: folder, accountUUID: accountUUID, appURL: appURL
+                    ))
+                }
             }
         }
         result.accountUUIDs["main"] = GraftAccountLabel.profileAccount(in: profileRoot.appending(path: "Claude"))
         result.status = try? send(PoolCommand())
         return result
+    }
+
+    private func installedApp(for profile: Profile, profileDirectory: URL) -> URL? {
+        let names = [profile.installedName, profile.name].compactMap { $0 }.filter { !$0.isEmpty }
+        for directory in appDirectories {
+            for name in names {
+                let candidate = directory.appending(path: "\(name).app")
+                if describesProfile(candidate, profileDirectory) { return candidate }
+            }
+        }
+        let fm = FileManager.default
+        for directory in appDirectories {
+            guard let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil,
+                                                          options: [.skipsHiddenFiles]) else { continue }
+            if let found = items.sorted(by: { $0.path < $1.path })
+                .first(where: { describesProfile($0, profileDirectory) }) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func describesProfile(_ bundle: URL, _ expectedProfile: URL) -> Bool {
+        guard bundle.pathExtension == "app" else { return false }
+        let resources = bundle.appending(path: "Contents/Resources")
+        for filename in ["graft.json", "switcher.json"] {
+            let file = resources.appending(path: filename)
+            guard let data = try? Data(contentsOf: file),
+                  let config = try? JSONDecoder().decode(GraftConfig.self, from: data) else { continue }
+            if Graft.samePath(URL(fileURLWithPath: config.profileDir), expectedProfile) { return true }
+        }
+        return false
     }
 
     func recheck(_ member: String, from profile: String) throws -> Bool {

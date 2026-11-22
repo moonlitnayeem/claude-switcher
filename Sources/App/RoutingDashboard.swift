@@ -16,6 +16,7 @@ struct RoutingAccountDisplay: Identifiable {
     var recheckPending = false
     var nickname: String? = nil
     var canSelect = true
+    var canOpenChatProfile = false
 }
 
 struct RoutingUsageMetric {
@@ -58,6 +59,16 @@ struct RoutingModelLimit: Identifiable {
 }
 
 extension RoutingDisplay {
+    var primaryFableLimited: Bool {
+        guard let primary = accounts.first else { return false }
+        return primary.fable?.percent == 100 || primary.fableReset != nil
+    }
+
+    var preferredBackupChatProfile: RoutingAccountDisplay? {
+        let backups = accounts.dropFirst().filter(\.canOpenChatProfile)
+        return backups.first { !$0.needsAttention && $0.fable?.percent != 100 && $0.fableReset == nil } ?? backups.first
+    }
+
     mutating func readRecentLimits(_ history: [PoolRouting]) {
         recentModelLimits = PoolRouting.latestModelRateLimits(in: history).compactMap { event in
             event.model.map { RoutingModelLimit(id: $0, at: event.at) }
@@ -98,6 +109,7 @@ struct RoutingDashboard: View {
             await pool.refreshRelayStatus()
         }, recheck: pool.recheckFable,
                      useOnly: { setMode($0, for: key) },
+                     openChatProfile: { openBackupChatProfile($0, primary: key) },
                      removeBackup: { pool.removeDisplayedBackup($0, from: key) },
                      renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) },
                      launchControls: key == UsagePoolController.mainKey ? ClaudeLaunchControls() : nil) {
@@ -146,6 +158,37 @@ struct RoutingDashboard: View {
             return email
         }
         return pool.name(of: key)
+    }
+
+    private func chatShortcut(for id: String, primary: String) -> Shortcut? {
+        guard id != primary else { return nil }
+        let candidates = store.shortcuts.filter { !store.isDraft($0) && UsagePoolController.key(for: $0) != primary }
+            .filter { ProfileOpener.bundle(for: $0) != nil }
+        if let direct = candidates.first(where: { UsagePoolController.key(for: $0) == id }) { return direct }
+        if let accountUUID = pool.accounts.first(where: { pool.sameIdentity(id, $0.id) })?.accountUuid?.lowercased(),
+           let matched = candidates.first(where: {
+               GraftAccountLabel.profileAccount(in: $0.profileDir)?.uuidString.lowercased() == accountUUID
+           }) {
+            return matched
+        }
+        let email = name(id).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !email.isEmpty else { return nil }
+        return candidates.first { shortcut in
+            guard GraftAccountLabel.profileAccount(in: shortcut.profileDir) == nil else { return false }
+            let shortcutName = shortcut.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let installedName = shortcut.installedName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return shortcutName == email || installedName == email
+        }
+    }
+
+    private func openBackupChatProfile(_ id: String, primary: String) {
+        guard let shortcut = chatShortcut(for: id, primary: primary) else {
+            routingError = L10n.text("No installed Claude profile was found for this backup account.")
+            return
+        }
+        ProfileOpener.open(profile: shortcut.profileDir, shortcut: shortcut) { error in
+            if let error { routingError = error.localizedDescription }
+        }
     }
 
     private func display(for key: String) -> RoutingDisplay {
@@ -286,6 +329,7 @@ struct RoutingDashboard: View {
         }
         row.nickname = labels.nickname(for: id)
         row.canSelect = pool.canSelectAccount(id, for: primary)
+        row.canOpenChatProfile = chatShortcut(for: id, primary: primary) != nil
         row.state = L10n.text(row.state)
         return row
     }
@@ -328,6 +372,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     let refresh: () async -> Bool
     let recheck: (String) -> Void
     let useOnly: (String) -> Void
+    var openChatProfile: ((String) -> Void)? = nil
     var removeBackup: ((String) -> Void)? = nil
     var renameAccount: ((String) -> Void)? = nil
     var updateUsage: ((String) -> Void)? = nil
@@ -402,6 +447,9 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                         Text(data.routingControlHint ?? L10n.text("These controls apply to new Claude Code requests in this profile."))
                             .font(.callout).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if data.primaryFableLimited, let backup = data.preferredBackupChatProfile, let openChatProfile {
+                            backupChatBanner(for: backup, action: openChatProfile)
+                        }
                         VStack(spacing: 0) {
                             ForEach(Array(data.accounts.enumerated()), id: \.element.id) { index, item in
                                 if index > 0 { Divider().padding(.leading, 16) }
@@ -440,6 +488,47 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
 
     private func heading(_ title: LocalizedStringKey) -> some View {
         Text(title).font(.system(size: 18, weight: .semibold)).accessibilityAddTraits(.isHeader)
+    }
+
+    private func backupChatBanner(for backup: RoutingAccountDisplay,
+                                  action: @escaping (String) -> Void) -> some View {
+        let targetName = backup.nickname ?? backup.name
+        let copy = HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 15, weight: .medium)).foregroundStyle(accent)
+                .frame(width: 28, height: 28)
+                .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Main reached its Fable limit").font(.callout.weight(.semibold))
+                Text("Claude Code switches automatically. Open your backup profile for Chat and Cowork.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        let button = Button {
+            action(backup.id)
+        } label: {
+            Label("Open Chat/Cowork on backup", systemImage: "arrow.up.forward.app")
+        }
+        .buttonStyle(.borderedProminent).controlSize(.small).tint(accent)
+        .help(L10n.format("Open %@ in a separate Claude window for Chat and Cowork.", targetName))
+        .accessibilityLabel(L10n.format("Open Chat and Cowork on backup %@", targetName))
+        .identified("routing.open-backup-chat")
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                copy
+                Spacer(minLength: 8)
+                button
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                copy
+                button
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 11)
+        .card(paper)
+        .identified("routing.backup-chat-banner")
     }
 
     private func accountRow(_ item: RoutingAccountDisplay, compact: Bool) -> some View {
@@ -510,6 +599,19 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
         .accessibilityLabel(selected ? L10n.format("Selected account, %@", item.nickname ?? item.name)
                                      : L10n.format("Use only %@", item.nickname ?? item.name))
         .identified("routing.only.\(item.id)")
+        if !item.isPrimary && item.canOpenChatProfile, let openChatProfile {
+            Button {
+                openChatProfile(item.id)
+            } label: {
+                Label(data.primaryFableLimited ? "Open Chat/Cowork on backup" : "Open Chat/Cowork",
+                      systemImage: "arrow.up.forward.app")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            .tint(data.primaryFableLimited ? accent : nil)
+            .help(L10n.format("Open %@ in a separate Claude window for Chat and Cowork.", item.nickname ?? item.name))
+            .accessibilityLabel(L10n.format("Open Chat and Cowork on backup %@", item.nickname ?? item.name))
+            .identified("routing.open-chat.\(item.id)")
+        }
         if let renameAccount {
             Button("Rename label") { renameAccount(item.id) }
                 .accessibilityLabel(L10n.format("Rename label for %@", item.name))
