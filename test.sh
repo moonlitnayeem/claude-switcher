@@ -18,6 +18,7 @@ swiftc -swift-version 5 \
     "$ROOT/Sources/Shared/ManualUpdates.swift" \
     "$ROOT/Sources/Shared/ClaudeUpdateGate.swift" \
     "$ROOT/Sources/Shared/UsagePool.swift" \
+    "$ROOT/Sources/Shared/UsageAlertEngine.swift" \
     "$ROOT/Sources/Shared/PoolEnvironment.swift" \
     "$ROOT/Sources/Shared/PoolHTTP.swift" \
     "$ROOT/Sources/App/Model.swift" \
@@ -55,6 +56,7 @@ swiftc -swift-version 5 \
     "$ROOT/Sources/Shared/ManualUpdates.swift" \
     "$ROOT/Sources/Shared/ClaudeUpdateGate.swift" \
     "$ROOT/Sources/Shared/UsagePool.swift" \
+    "$ROOT/Sources/Shared/UsageAlertEngine.swift" \
     "$ROOT/Sources/Shared/PoolEnvironment.swift" \
     "$ROOT/Sources/Launcher/main.swift" \
     -o "$BUILD/graft-launch"

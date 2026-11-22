@@ -17,23 +17,60 @@ struct RoutingAccountDisplay: Identifiable {
     var nickname: String? = nil
     var canSelect = true
     var canOpenChatProfile = false
+    var chatProfileSignedIn = true
+    var canCreateChatProfile = false
+    var session: RoutingUsageMetric? = nil
 }
 
 struct RoutingUsageMetric {
     var percent: Int
     var observedAt: Date
     var source: String
+    var resetAt: Date? = nil
 
-    init(percent: Int, observedAt: Date, source: String) {
+    init(percent: Int, observedAt: Date, source: String, resetAt: Date? = nil) {
         self.percent = percent
         self.observedAt = observedAt
         self.source = source
+        self.resetAt = resetAt
     }
 
     init(_ metric: ClaudeUsageDisplay.Metric) {
         self.init(percent: metric.percent, observedAt: metric.observedAt,
-                  source: L10n.text(metric.source.rawValue))
+                  source: L10n.text(metric.source.rawValue), resetAt: metric.resetAt)
     }
+
+    static func resetSummary(_ date: Date, now: Date = Date()) -> String? {
+        let remaining = date.timeIntervalSince(now)
+        guard remaining > 0 else { return nil }
+        if remaining < 24 * 3600 {
+            let totalMinutes = max(1, Int((remaining / 60).rounded()))
+            let hours = totalMinutes / 60
+            let minutes = totalMinutes % 60
+            if hours > 0 {
+                return L10n.format("Resets in %ldh %ldm", hours, minutes)
+            }
+            return L10n.format("Resets in %ldm", minutes)
+        }
+        return L10n.format("Resets %@", date.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
+    }
+}
+
+struct RoutingRecentEvent: Identifiable, Equatable {
+    let id: String
+    let at: Date
+    let status: Int
+    let model: String?
+    let accountName: String
+    let isBackup: Bool
+    let failoverReason: String?
+}
+
+struct RoutingAccountReplyCount: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let isPrimary: Bool
+    let count: Int
 }
 
 struct RoutingDisplay {
@@ -46,6 +83,8 @@ struct RoutingDisplay {
     var lastAnswered: Date?
     var latestFailure: String?
     var recentModelLimits: [RoutingModelLimit] = []
+    var recentEvents: [RoutingRecentEvent] = []
+    var replyCounts: [RoutingAccountReplyCount] = []
     var route: RouteMapSignal?
     var externallyManaged = false
     var exclusiveAccount: String?
@@ -75,6 +114,41 @@ extension RoutingDisplay {
         }
     }
 
+    mutating func populateActivityFeed(_ history: [PoolRouting],
+                                       canonical: (String) -> String,
+                                       accountName: (String) -> String) {
+        var countsByID: [String: Int] = [:]
+        for event in history where (200..<300).contains(event.status) {
+            countsByID[canonical(event.servedBy), default: 0] += 1
+        }
+        replyCounts = accounts.compactMap { row in
+            guard let count = countsByID[row.id], count > 0 else { return nil }
+            return RoutingAccountReplyCount(id: row.id, name: row.nickname ?? row.name,
+                                            isPrimary: row.isPrimary, count: count)
+        }
+        let primaryID = accounts.first?.id
+        recentEvents = history.suffix(12).reversed().enumerated().map { offset, event in
+            let servedKey = canonical(event.servedBy)
+            let reason: String?
+            if event.passedOver.contains(where: { $0.reason == .full }) {
+                reason = L10n.text("main full")
+            } else if !event.passedOver.isEmpty {
+                reason = L10n.text("switched")
+            } else {
+                reason = nil
+            }
+            return RoutingRecentEvent(
+                id: "\(offset)-\(event.at.timeIntervalSince1970)-\(servedKey)",
+                at: event.at,
+                status: event.status,
+                model: event.model.map(RoutingDashboard.modelName),
+                accountName: accountName(servedKey),
+                isBackup: primaryID != nil && servedKey != primaryID,
+                failoverReason: reason
+            )
+        }
+    }
+
     func showsRateLimit(for event: PoolRouting) -> Bool {
         recentModelLimits.contains { $0.id == event.model && $0.at == event.at }
     }
@@ -92,6 +166,7 @@ struct RoutingDashboard: View {
     @State private var profile = UsagePoolController.mainKey
     @ObservedObject private var labels = ClaudeAccountLabels.standalone
     @State private var editingLabel: ClaudeLabelTarget?
+    @State private var signInTarget: BackupSignInTarget?
     @State private var changingMode = false
     @State private var routingError: String?
 
@@ -102,7 +177,8 @@ struct RoutingDashboard: View {
     var body: some View {
         // A deleted profile falls back to the main Claude even if the dashboard stayed open.
         let key = profiles.contains(profile) ? profile : UsagePoolController.mainKey
-        RoutingPanel(data: display(for: key), enabled: Binding(
+        let currentDisplay = display(for: key)
+        RoutingPanel(data: currentDisplay, enabled: Binding(
             get: { pool.canSetRoutingMode(for: key) && pool.exclusiveAccount(for: key) == nil && pool.automaticSwitchingEnabled(for: key) },
             set: { setMode($0 ? nil : key, for: key) }
         ), canSwitch: pool.canSetRoutingMode(for: key) && !changingMode, refresh: {
@@ -110,6 +186,8 @@ struct RoutingDashboard: View {
         }, recheck: pool.recheckFable,
                      useOnly: { setMode($0, for: key) },
                      openChatProfile: { openBackupChatProfile($0, primary: key) },
+                     signInChatProfile: { startBackupSignIn($0, primary: key) },
+                     createChatProfile: { createBackupChatProfile($0) },
                      removeBackup: { pool.removeDisplayedBackup($0, from: key) },
                      renameAccount: { id in editingLabel = ClaudeLabelTarget(id: id, name: name(id)) },
                      launchControls: key == UsagePoolController.mainKey ? ClaudeLaunchControls() : nil) {
@@ -135,12 +213,20 @@ struct RoutingDashboard: View {
         .sheet(item: $editingLabel) { item in
             ClaudeAccountLabelEditor(id: item.id, accountName: item.name, labels: labels)
         }
+        .sheet(item: $signInTarget) { target in
+            BackupProfileSignInSheet(target: target) {
+                Task { _ = await pool.refreshRelayStatus() }
+            }
+        }
         .alert("Couldn’t change accounts", isPresented: Binding(get: { routingError != nil },
                                                                set: { if !$0 { routingError = nil } })) {
             Button("OK") { routingError = nil }
         } message: { Text(routingError ?? "") }
         .onAppear { pool.watch() }
         .onDisappear { pool.unwatch() }
+        .onChange(of: pool.status?.recent.count) { _ in
+            UsageAlertNotifier.shared.observe(currentDisplay.accounts)
+        }
     }
 
     private func setMode(_ account: String?, for profile: String) {
@@ -191,6 +277,33 @@ struct RoutingDashboard: View {
         }
     }
 
+    private func startBackupSignIn(_ id: String, primary: String) {
+        guard let shortcut = chatShortcut(for: id, primary: primary),
+              let bundle = ProfileOpener.bundle(for: shortcut) else {
+            routingError = L10n.text("No installed Claude profile was found for this backup account.")
+            return
+        }
+        signInTarget = BackupSignInTarget(id: id, accountName: name(id),
+                                          appURL: bundle, profileDir: shortcut.profileDir)
+    }
+
+    private func createBackupChatProfile(_ id: String) {
+        let displayName = name(id)
+        do {
+            let created = try BackupProfileManager.createProfileBundle(
+                accountName: displayName,
+                profileRoot: Graft.applicationSupport
+            )
+            var shortcut = Shortcut(name: displayName, folder: created.profileDir.lastPathComponent, source: .own)
+            shortcut.installedName = created.appURL.deletingPathExtension().lastPathComponent
+            store.shortcuts.append(shortcut)
+            signInTarget = BackupSignInTarget(id: id, accountName: displayName,
+                                              appURL: created.appURL, profileDir: created.profileDir)
+        } catch {
+            routingError = error.localizedDescription
+        }
+    }
+
     private func display(for key: String) -> RoutingDisplay {
         let available = pool.members(of: key)
         let ids = available.isEmpty ? [key] : available
@@ -221,6 +334,9 @@ struct RoutingDashboard: View {
                                           backup: !pool.sameIdentity(recent.servedBy, key), model: recent.model.map(Self.modelName), at: recent.at)
         }
         result.readRecentLimits(history)
+        result.populateActivityFeed(history, canonical: { id in
+            rows.first(where: { pool.sameIdentity($0.id, id) })?.id ?? id
+        }, accountName: name)
         if let failed = history.last, !(200..<300).contains(failed.status), !result.showsRateLimit(for: failed) {
             let model = failed.model.map(Self.modelName) ?? "Claude Code"
             result.latestFailure = failed.status == 429
@@ -277,28 +393,46 @@ struct RoutingDashboard: View {
            let live = entry.currentUsage, let observed = entry.refreshed,
            (0 ..< 5 * 3600).contains(now.timeIntervalSince(observed)) {
             let source = L10n.text(entry.isLive ? "Claude usage service" : "Claude profile record")
+            if let sessionPercent = live.fiveHour, (0...100).contains(sessionPercent),
+               (live.fiveHourReset ?? .distantFuture) > now {
+                row.session = RoutingUsageMetric(percent: sessionPercent, observedAt: observed,
+                                                 source: source, resetAt: live.fiveHourReset)
+            }
             if live.weeklyReadingPresent, (0...100).contains(live.week), (live.weekReset ?? .distantFuture) > now {
-                row.weekly = RoutingUsageMetric(percent: live.week, observedAt: observed, source: source)
+                row.weekly = RoutingUsageMetric(percent: live.week, observedAt: observed,
+                                                source: source, resetAt: live.weekReset)
             }
             if let percent = live.fable, (0...100).contains(percent), (live.fableReset ?? .distantFuture) > now {
-                row.fable = RoutingUsageMetric(percent: percent, observedAt: observed, source: source)
+                row.fable = RoutingUsageMetric(percent: percent, observedAt: observed,
+                                               source: source, resetAt: live.fableReset)
             }
         }
         if let limits {
             let relaySource = L10n.text(ClaudeUsageDisplay.Source.relay.rawValue)
             if (0 ..< 5 * 3600).contains(now.timeIntervalSince(limits.observed)),
+               (limits.fiveHourReset ?? .distantFuture) > now {
+                let percent = Int((limits.fiveHour * 100).rounded())
+                if (0...100).contains(percent), row.session == nil || limits.observed > row.session!.observedAt {
+                    row.session = RoutingUsageMetric(percent: percent, observedAt: limits.observed,
+                                                     source: relaySource, resetAt: limits.fiveHourReset)
+                }
+            }
+            if (0 ..< 5 * 3600).contains(now.timeIntervalSince(limits.observed)),
                (limits.weekReset ?? .distantFuture) > now {
                 let percent = Int((limits.week * 100).rounded())
                 if (0...100).contains(percent), row.weekly == nil || limits.observed > row.weekly!.observedAt {
-                    row.weekly = RoutingUsageMetric(percent: percent, observedAt: limits.observed, source: relaySource)
+                    row.weekly = RoutingUsageMetric(percent: percent, observedAt: limits.observed,
+                                                    source: relaySource, resetAt: limits.weekReset)
                 }
             }
             let fableAt = limits.fableObserved ?? limits.observed
+            let fableReset = limits.fableReset ?? limits.weekReset
             if let fable = limits.fable, (0 ..< 5 * 3600).contains(now.timeIntervalSince(fableAt)),
-               (limits.fableReset ?? limits.weekReset ?? .distantFuture) > now {
+               (fableReset ?? .distantFuture) > now {
                 let percent = Int((fable * 100).rounded())
                 if (0...100).contains(percent), row.fable == nil || fableAt > row.fable!.observedAt {
-                    row.fable = RoutingUsageMetric(percent: percent, observedAt: fableAt, source: relaySource)
+                    row.fable = RoutingUsageMetric(percent: percent, observedAt: fableAt,
+                                                   source: relaySource, resetAt: fableReset)
                 }
             }
         }
@@ -329,7 +463,12 @@ struct RoutingDashboard: View {
         }
         row.nickname = labels.nickname(for: id)
         row.canSelect = pool.canSelectAccount(id, for: primary)
-        row.canOpenChatProfile = chatShortcut(for: id, primary: primary) != nil
+        if let matchedShortcut = chatShortcut(for: id, primary: primary) {
+            row.canOpenChatProfile = true
+            row.chatProfileSignedIn = GraftAccountLabel.profileAccount(in: matchedShortcut.profileDir) != nil
+        } else if !row.isPrimary {
+            row.canCreateChatProfile = Bundle.main.url(forResource: "graft-launch", withExtension: nil) != nil
+        }
         row.state = L10n.text(row.state)
         return row
     }
@@ -373,6 +512,8 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     let recheck: (String) -> Void
     let useOnly: (String) -> Void
     var openChatProfile: ((String) -> Void)? = nil
+    var signInChatProfile: ((String) -> Void)? = nil
+    var createChatProfile: ((String) -> Void)? = nil
     var removeBackup: ((String) -> Void)? = nil
     var renameAccount: ((String) -> Void)? = nil
     var updateUsage: ((String) -> Void)? = nil
@@ -383,6 +524,7 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
     @Environment(\.colorScheme) private var scheme
     @State private var refreshing = false
     @State private var refreshResult: String?
+    @State private var showRecentRequests = false
 
     private var canvas: Color {
         scheme == .dark ? Color(red: 0.065, green: 0.078, blue: 0.103) : Color(red: 0.955, green: 0.964, blue: 0.975)
@@ -515,15 +657,24 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
         .help(L10n.format("Open %@ in a separate Claude window for Chat and Cowork.", targetName))
         .accessibilityLabel(L10n.format("Open Chat and Cowork on backup %@", targetName))
         .identified("routing.open-backup-chat")
+        let actions = HStack(spacing: 8) {
+            button
+            if !backup.chatProfileSignedIn, let signInChatProfile {
+                Button("Sign in backup…") { signInChatProfile(backup.id) }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help(L10n.text("Sign in without closing your running main Claude window."))
+                    .identified("routing.banner-signin-backup")
+            }
+        }
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
                 copy
                 Spacer(minLength: 8)
-                button
+                actions
             }
             VStack(alignment: .leading, spacing: 8) {
                 copy
-                button
+                actions
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
@@ -571,6 +722,10 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                 }.padding(.top, 4)
                 let layout = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 9))
                                      : AnyLayout(HStackLayout(alignment: .top, spacing: 18))
+                if item.session != nil {
+                    usageBar("Current session (5h)", metric: item.session, id: "routing.session.\(item.id)")
+                        .padding(.top, 6)
+                }
                 layout {
                     usageBar("Overall weekly", metric: item.weekly, id: "routing.weekly.\(item.id)")
                     usageBar("Fable usage", metric: item.fable, id: "routing.fable.\(item.id)")
@@ -611,6 +766,21 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
             .help(L10n.format("Open %@ in a separate Claude window for Chat and Cowork.", item.nickname ?? item.name))
             .accessibilityLabel(L10n.format("Open Chat and Cowork on backup %@", item.nickname ?? item.name))
             .identified("routing.open-chat.\(item.id)")
+            if !item.chatProfileSignedIn, let signInChatProfile {
+                Button("Sign in backup…") { signInChatProfile(item.id) }
+                    .font(.caption).buttonStyle(RoutingTextButtonStyle(color: accent))
+                    .help(L10n.text("Sign in without closing your running main Claude window."))
+                    .identified("routing.signin-chat.\(item.id)")
+            }
+        } else if !item.isPrimary && item.canCreateChatProfile, let createChatProfile {
+            Button {
+                createChatProfile(item.id)
+            } label: {
+                Label("Create Chat/Cowork profile", systemImage: "plus.app")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            .help(L10n.text("Create a separate side-by-side Claude window for this backup account."))
+            .identified("routing.create-chat.\(item.id)")
         }
         if let renameAccount {
             Button("Rename label") { renameAccount(item.id) }
@@ -636,8 +806,14 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
 
     private func usageBar(_ title: String, metric: RoutingUsageMetric?, id: String) -> some View {
         let value = metric.map { L10n.format("%ld%% used", $0.percent) } ?? L10n.text("No recent reading")
-        let source = metric.map { L10n.format("%@ · %@", $0.source,
-                                                $0.observedAt.formatted(date: .abbreviated, time: .shortened)) }
+        let source = metric.map { item -> String in
+            let base = L10n.format("%@ · %@", item.source,
+                                   item.observedAt.formatted(date: .abbreviated, time: .shortened))
+            if let reset = item.resetAt.flatMap({ RoutingUsageMetric.resetSummary($0) }) {
+                return base + " · " + reset
+            }
+            return base
+        }
         return VStack(alignment: .leading, spacing: 4) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 6) {
@@ -690,6 +866,46 @@ struct RoutingPanel<Profile: View, AccountActions: View, Manage: View>: View {
                 }
                 Text([data.lastModel, name].compactMap { $0 }.joined(separator: "  ·  "))
                     .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                if !data.replyCounts.isEmpty {
+                    let summary = data.replyCounts.map { row in
+                        L10n.format("%@: %ld", row.name, row.count)
+                    }.joined(separator: "  ·  ")
+                    Text(L10n.format("Session replies · %@", summary))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .identified("routing.reply-counts")
+                }
+                if data.recentEvents.count > 1 {
+                    Divider()
+                    DisclosureGroup(isExpanded: $showRecentRequests) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(data.recentEvents) { event in
+                                HStack(spacing: 8) {
+                                    Image(systemName: (200..<300).contains(event.status) ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle((200..<300).contains(event.status) ? accent : .orange)
+                                        .accessibilityHidden(true)
+                                    Text(event.model ?? "Claude Code")
+                                        .font(.caption.weight(.medium))
+                                    Text("→").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                                    Text(event.accountName)
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    if let reason = event.failoverReason {
+                                        Text("(\(reason))")
+                                            .font(.caption2).foregroundStyle(accent)
+                                    }
+                                    Spacer(minLength: 4)
+                                    Text(event.at, format: .dateTime.hour().minute().second())
+                                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.top, 4)
+                    } label: {
+                        Text(L10n.format("Recent requests (%ld)", data.recentEvents.count))
+                            .font(.caption.weight(.semibold))
+                    }
+                    .identified("routing.recent-feed")
+                }
             } else {
                 Label("No successful request recorded", systemImage: "clock")
                     .font(.callout).foregroundStyle(.secondary)

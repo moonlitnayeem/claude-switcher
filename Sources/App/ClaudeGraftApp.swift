@@ -75,6 +75,11 @@ struct SettingsView: View {
                     .identified("open-at-login")
                 Toggle("Show in Menu Bar", isOn: $settings.showInMenuBar)
                     .identified("show-in-menu-bar")
+                Toggle("Usage & Failover Notifications", isOn: Binding(
+                    get: { UsageAlertNotifier.shared.alertsEnabled },
+                    set: { UsageAlertNotifier.shared.alertsEnabled = $0 }
+                ))
+                .identified("usage-alerts")
                 if !GraftConnection.isEnabled {
                     FrontClaudeControl().disabled(!settings.showInMenuBar)
                     ManualUpdateControl()

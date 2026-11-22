@@ -137,13 +137,13 @@ struct GraftConnection {
             return PoolPolicy.hasRoom(limits, now: now)
         }
 
-        func chatProfileApp(for member: String, from profile: String) -> URL? {
+        func chatShortcut(for member: String, from profile: String) -> ShortcutProfile? {
             guard member != profile else { return nil }
             let candidates = shortcutProfiles.filter { $0.id != profile }
-            if let direct = candidates.first(where: { $0.id == member }) { return direct.appURL }
+            if let direct = candidates.first(where: { $0.id == member }) { return direct }
             if let uuid = accountUUIDs[member],
                let matched = candidates.first(where: { $0.accountUUID == uuid }) {
-                return matched.appURL
+                return matched
             }
             if let email = email(for: member, from: profile)?
                 .trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
@@ -153,9 +153,13 @@ struct GraftConnection {
                    ($0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email ||
                     $0.installedName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email)
                }) {
-                return byName.appURL
+                return byName
             }
             return nil
+        }
+
+        func chatProfileApp(for member: String, from profile: String) -> URL? {
+            chatShortcut(for: member, from: profile)?.appURL
         }
     }
 
@@ -209,9 +213,47 @@ struct GraftConnection {
                 }
             }
         }
+        let knownFolders = Set(result.shortcutProfiles.map(\.folder))
+        for discovered in discoveredShortcutBundles(excludingFolders: knownFolders) {
+            result.shortcutProfiles.append(discovered)
+        }
         result.accountUUIDs["main"] = GraftAccountLabel.profileAccount(in: profileRoot.appending(path: "Claude"))
         result.status = try? send(PoolCommand())
         return result
+    }
+
+    private func discoveredShortcutBundles(excludingFolders: Set<String>) -> [ShortcutProfile] {
+        let fm = FileManager.default
+        var seenFolders = excludingFolders
+        var found: [ShortcutProfile] = []
+        for directory in appDirectories {
+            guard let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil,
+                                                          options: [.skipsHiddenFiles]) else { continue }
+            for bundle in items.sorted(by: { $0.path < $1.path }) where bundle.pathExtension == "app" {
+                guard let target = bundleProfileDirectory(bundle)?.resolvingSymlinksInPath(),
+                      Graft.samePath(target.deletingLastPathComponent(), profileRoot) else { continue }
+                let folder = target.lastPathComponent
+                guard folder != "Claude", Graft.validateFolder(folder) == nil,
+                      seenFolders.insert(folder).inserted else { continue }
+                let baseName = bundle.deletingPathExtension().lastPathComponent
+                let accountUUID = GraftAccountLabel.profileAccount(in: target)
+                found.append(ShortcutProfile(id: "bundle:\(folder)", name: baseName,
+                                             installedName: baseName, folder: folder,
+                                             accountUUID: accountUUID, appURL: bundle))
+            }
+        }
+        return found
+    }
+
+    private func bundleProfileDirectory(_ bundle: URL) -> URL? {
+        let resources = bundle.appending(path: "Contents/Resources")
+        for filename in ["graft.json", "switcher.json"] {
+            let file = resources.appending(path: filename)
+            guard let data = try? Data(contentsOf: file),
+                  let config = try? JSONDecoder().decode(GraftConfig.self, from: data) else { continue }
+            return URL(fileURLWithPath: config.profileDir)
+        }
+        return nil
     }
 
     private func installedApp(for profile: Profile, profileDirectory: URL) -> URL? {

@@ -14,6 +14,7 @@ struct ContentView: View {
     static let routingID = UUID(uuidString: "00000000-0000-0000-0000-000000000005")!
 
     static let openAIID = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
+    static let geminiID = UUID(uuidString: "00000000-0000-0000-0000-000000000007")!
 
     @EnvironmentObject private var store: ShortcutStore
     @State private var selection: UUID? = ContentView.routingID
@@ -103,6 +104,8 @@ struct ContentView: View {
             }
         } else if selection == Self.openAIID {
             OpenAIAccountsView()
+        } else if selection == Self.geminiID {
+            GeminiAccountsView()
         } else if selection == Self.mainProfileID {
             MainProfileDetail()
         } else if selection == Self.artifactsID {
@@ -164,16 +167,21 @@ struct ContentView: View {
                 Label("ChatGPT & Codex", systemImage: "bubble.left.and.text.bubble.right")
                     .identified("sidebar.openai")
                     .tag(Self.openAIID)
+                Label("Gemini & Antigravity", systemImage: "sparkles")
+                    .identified("sidebar.gemini")
+                    .tag(Self.geminiID)
             }
 
+            claudeLibraryItems
+
             if !GraftConnection.isEnabled {
-                claudeSidebarItems
+                claudeProfileItems
             }
         }
         .onDeleteCommand { if !GraftConnection.isEnabled, let selection { requestDeletion(of: selection) } }
     }
 
-    @ViewBuilder private var claudeSidebarItems: some View {
+    @ViewBuilder private var claudeLibraryItems: some View {
         Section("Claude library") {
             Label("Artifacts", systemImage: "square.on.square")
                 .identified("sidebar.artifacts")
@@ -185,7 +193,9 @@ struct ContentView: View {
                 .identified("sidebar.search")
                 .tag(Self.searchID)
         }
+    }
 
+    @ViewBuilder private var claudeProfileItems: some View {
         Section("Claude profiles") {
             Label("Claude", systemImage: "house")
                 .spoken("Claude", value: L10n.text("Installed normally"))

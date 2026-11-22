@@ -21,6 +21,18 @@ enum ClaudeUsageDisplay {
         let percent: Int
         let observedAt: Date
         let source: Source
+        var resetAt: Date? = nil
+
+        init(percent: Int, observedAt: Date, source: Source, resetAt: Date? = nil) {
+            self.percent = percent
+            self.observedAt = observedAt
+            self.source = source
+            self.resetAt = resetAt
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.percent == rhs.percent && lhs.observedAt == rhs.observedAt && lhs.source == rhs.source
+        }
 
         fileprivate func isCurrent(at now: Date) -> Bool {
             let age = now.timeIntervalSince(observedAt)
@@ -29,6 +41,7 @@ enum ClaudeUsageDisplay {
     }
 
     struct Reading: Codable, Equatable {
+        var session: Metric? = nil
         var weekly: Metric?
         var fable: Metric?
     }
@@ -103,25 +116,28 @@ enum ClaudeUsageDisplay {
             guard let id = row["accountUuid"] as? String, let account = UUID(uuidString: id),
                   let live = row["live"] as? NSNumber, CFGetTypeID(live) == CFBooleanGetTypeID(),
                   live.boolValue, row["note"] == nil, let observed = date(row["refreshedAt"]) else { continue }
-            func metric(_ key: String) -> Metric? {
+            func metric(_ key: String, resetKey: String? = nil) -> Metric? {
                 guard let number = row[key] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
                       let percent = Int(exactly: number.doubleValue) else { return nil }
-                if let reset = row[key + "Reset"] {
+                var resetDate: Date?
+                if let reset = row[resetKey ?? (key + "Reset")] {
                     guard let end = date(reset), end > now else { return nil }
+                    resetDate = end
                 }
-                let sample = Metric(percent: percent, observedAt: observed, source: .graftUsage)
+                let sample = Metric(percent: percent, observedAt: observed, source: .graftUsage, resetAt: resetDate)
                 return sample.isCurrent(at: now) ? sample : nil
             }
             var reading = result[account] ?? Reading()
+            reading.session = newer(reading.session, metric("fiveHour") ?? metric("session", resetKey: "fiveHourReset"))
             reading.weekly = newer(reading.weekly, metric("week"))
             reading.fable = newer(reading.fable, metric("fable"))
-            if reading.weekly != nil || reading.fable != nil { result[account] = reading }
+            if reading.session != nil || reading.weekly != nil || reading.fable != nil { result[account] = reading }
         }
         return result
     }
 
-    static func load(account: UUID, relayWeekly: Metric? = nil, relayFable: Metric? = nil,
-                     graftReading: Reading? = nil, now: Date = Date()) -> Reading {
+    static func load(account: UUID, relaySession: Metric? = nil, relayWeekly: Metric? = nil,
+                     relayFable: Metric? = nil, graftReading: Reading? = nil, now: Date = Date()) -> Reading {
         let stored = try? saved(for: account)
         func page(_ metric: Metric?) -> Metric? {
             metric.flatMap { $0.source.isPageReading && $0.isCurrent(at: now) ? $0 : nil }
@@ -129,11 +145,13 @@ enum ClaudeUsageDisplay {
         func graft(_ metric: Metric?) -> Metric? {
             metric.flatMap { $0.source == .graftUsage && $0.isCurrent(at: now) ? $0 : nil }
         }
+        let relayS = relaySession.flatMap { $0.source == .relay && $0.isCurrent(at: now) ? $0 : nil }
         let relayW = relayWeekly.flatMap { $0.source == .relay && $0.isCurrent(at: now) ? $0 : nil }
         let relayF = relayFable.flatMap { $0.source == .relay && $0.isCurrent(at: now) ? $0 : nil }
+        let session = newer(graft(graftReading?.session), relayS)
         let weekly = newer(page(stored?.weekly), graft(graftReading?.weekly))
         let fable = newer(page(stored?.fable), graft(graftReading?.fable))
-        return Reading(weekly: newer(weekly, relayW), fable: newer(fable, relayF))
+        return Reading(session: session, weekly: newer(weekly, relayW), fable: newer(fable, relayF))
     }
 
     private static func newer(_ existing: Metric?, _ incoming: Metric?) -> Metric? {

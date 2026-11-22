@@ -144,6 +144,36 @@ do {
         RoutingAccountDisplay(id: "b3", name: "none@example.org", isPrimary: false, state: "Signed in", canOpenChatProfile: false),
     ])
     precondition(noProfileDisplay.preferredBackupChatProfile == nil)
+    precondition(RoutingUsageMetric.resetSummary(now.addingTimeInterval(2 * 3600 + 15 * 60), now: now)?.contains("2") == true)
+
+    var feedDisplay = limitedDisplay
+    feedDisplay.populateActivityFeed([
+        PoolRouting(at: now.addingTimeInterval(-10), from: "main", servedBy: "main", status: 200,
+                    passedOver: [], session: "s1", model: "claude-opus-5-5"),
+        PoolRouting(at: now, from: "main", servedBy: "b2", status: 200,
+                    passedOver: [PoolPass(id: "main", reason: .full)], session: "s1", model: "claude-fable-5-2"),
+    ], canonical: { $0 }, accountName: { $0 })
+    precondition(feedDisplay.recentEvents.count == 2 && feedDisplay.recentEvents.first?.isBackup == true)
+    precondition(feedDisplay.replyCounts.map(\.count).reduce(0, +) == 2)
+
+    var gemini = GeminiProfileIndex()
+    precondition(gemini.available.count == 2 && gemini.selected?.id == .first)
+    gemini.add("Work")
+    precondition(gemini.available.count == 3 && gemini.selected?.displayName == "Work")
+    let tempRoot = FileManager.default.temporaryDirectory.appending(path: "gemini-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+    try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    let geminiLauncher = GeminiProfileLauncher(root: tempRoot.appending(path: "profiles"))
+    let browserArgs = try geminiLauncher.browserArguments(for: .first)
+    precondition(browserArgs.contains(where: { $0.hasPrefix("--user-data-dir=") }))
+    let agyScript = try geminiLauncher.agyCommand(for: gemini.selected!.id, accountLabel: "work-acct",
+                                                  executable: URL(fileURLWithPath: "/usr/bin/true"), project: tempRoot)
+    let agyText = try String(contentsOf: agyScript, encoding: .utf8)
+    precondition(agyText.contains("AGY_ACCOUNT='work-acct'"))
+    let cliScript = try geminiLauncher.geminiCLICommand(for: .first,
+                                                        executable: URL(fileURLWithPath: "/usr/bin/true"), project: tempRoot)
+    let cliText = try String(contentsOf: cliScript, encoding: .utf8)
+    precondition(cliText.contains("GEMINI_CLI_HOME="))
 }
 try MainActor.assumeIsolated {
     try capture("routing-light", dark: false, compact: false)

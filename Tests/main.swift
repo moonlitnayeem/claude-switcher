@@ -7567,6 +7567,43 @@ do {
           "a sign-in is announced under the store it was made in, whether it adds an account or finds one already there")
 }
 
+do {
+    let now = Date(timeIntervalSince1970: 1_785_000_000)
+    let reset1 = now.addingTimeInterval(3 * 86_400)
+    let reset2 = now.addingTimeInterval(10 * 86_400)
+    var engine = UsageAlertEngine()
+
+    // Initial baseline observation should not fire alerts.
+    let initial = engine.evaluate([
+        UsageAlertAccountSample(id: "main", name: "Main", isPrimary: true, fablePercent: 92, fableReset: reset1),
+        UsageAlertAccountSample(id: "b1", name: "Backup", isPrimary: false, fablePercent: 75, fableReset: reset1),
+    ], now: now)
+    check(initial.isEmpty, "initial baseline observation records usage without firing duplicate alerts")
+
+    // Main crossing 100% and backup crossing 85% fire once.
+    let crossed = engine.evaluate([
+        UsageAlertAccountSample(id: "main", name: "Main", isPrimary: true, fablePercent: 100, fableReset: reset1),
+        UsageAlertAccountSample(id: "b1", name: "Backup", isPrimary: false, fablePercent: 86, fableReset: reset1),
+    ], now: now)
+    check(crossed.map(\.kind) == [.primaryFableFull, .backupFable85],
+          "main reaching 100% Fable and backup crossing 85% each emit one transition alert")
+
+    // Repeated poll in the same window emits nothing.
+    let repeated = engine.evaluate([
+        UsageAlertAccountSample(id: "main", name: "Main", isPrimary: true, fablePercent: 100, fableReset: reset1),
+        UsageAlertAccountSample(id: "b1", name: "Backup", isPrimary: false, fablePercent: 88, fableReset: reset1),
+    ], now: now)
+    check(repeated.isEmpty, "repeated observations in the same reset window do not repeat alerts")
+
+    // Backup crossing 95% emits backupFable95, and main resetting in a new window emits fableReset.
+    let nextWindow = engine.evaluate([
+        UsageAlertAccountSample(id: "main", name: "Main", isPrimary: true, fablePercent: 0, fableReset: reset2),
+        UsageAlertAccountSample(id: "b1", name: "Backup", isPrimary: false, fablePercent: 96, fableReset: reset1),
+    ], now: now)
+    check(nextWindow.map(\.kind) == [.fableReset, .backupFable95],
+          "a fresh Fable reset window and 95% backup warning both fire cleanly")
+}
+
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
     print("\(failures) FAILED")

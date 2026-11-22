@@ -321,6 +321,7 @@ struct Page {
 let pages = [
     Page(name: "routing", selection: ContentView.routingID, profile: nil),
     Page(name: "openai", selection: ContentView.openAIID, profile: nil),
+    Page(name: "gemini", selection: ContentView.geminiID, profile: nil),
     Page(name: "claude", selection: ContentView.mainProfileID, profile: Graft.mainProfile),
     Page(name: "claude-2", selection: shortcut.id, profile: shortcut.profileDir),
     Page(name: "claude-3-draft", selection: draft.id, profile: draft.profileDir),
@@ -690,8 +691,8 @@ for page in pages {
                 let content = table.map { $0.numberOfRows == 0 ? 0 : $0.rect(ofRow: $0.numberOfRows - 1).maxY }
                     ?? document.frame.height
                 let overflow = content - room(in: scroll)
-                // Both account pages allow vertical scrolling while keeping controls in reach.
-                if [ContentView.routingID, ContentView.openAIID].contains(page.selection) {
+                // Account pages allow vertical scrolling while keeping controls in reach.
+                if [ContentView.routingID, ContentView.openAIID, ContentView.geminiID].contains(page.selection) {
                     check(scroll.bounds.width >= 200 && scroll.bounds.height >= 200,
                           "\(place): the account page has room to scroll")
                     continue
