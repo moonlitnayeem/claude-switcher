@@ -36,6 +36,7 @@ swiftc -swift-version 5 \
     "$ROOT/Sources/App/ClaudeDesktopUpdater.swift" \
     "$ROOT/Sources/App/FrontClaude.swift" \
     "$ROOT/Sources/App/GraftConnection.swift" \
+    "$ROOT/Sources/App/GraftAccountInventory.swift" \
     "$ROOT/Sources/App/UsagePoolController.swift" \
     "$ROOT/Sources/App/ClaudeCodeEnvironment.swift" \
     "$ROOT/Sources/App/AccountSignIn.swift" \

@@ -7604,6 +7604,50 @@ do {
           "a fresh Fable reset window and 95% backup warning both fire cleanly")
 }
 
+do {
+    let invRoot = FileManager.default.temporaryDirectory.appending(path: "graft-inv-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: invRoot) }
+    try FileManager.default.createDirectory(at: invRoot.appending(path: "pool"), withIntermediateDirectories: true)
+    let inventory = GraftAccountInventory(root: invRoot)
+    let now = Date()
+    let a1 = PoolAccount(id: "account:11111111-1111-1111-1111-111111111111",
+                         accountUuid: "11111111-1111-1111-1111-111111111111",
+                         email: "one@example.org", organizationName: nil,
+                         scopes: ["user:inference"], expires: now.addingTimeInterval(86_400),
+                         added: now, sealed: "s1")
+    let a2 = PoolAccount(id: "account:22222222-2222-2222-2222-222222222222",
+                         accountUuid: "22222222-2222-2222-2222-222222222222",
+                         email: "two@example.org", organizationName: nil,
+                         scopes: ["user:inference"], expires: now.addingTimeInterval(86_400),
+                         added: now, sealed: "s2")
+    let a3 = PoolAccount(id: "account:33333333-3333-3333-3333-333333333333",
+                         accountUuid: "33333333-3333-3333-3333-333333333333",
+                         email: "three@example.org", organizationName: nil,
+                         scopes: ["user:inference"], expires: now.addingTimeInterval(86_400),
+                         added: now, sealed: "s3")
+    try inventory.saveSignedInAccount(a1, attachTo: "main")
+    try inventory.saveSignedInAccount(a2, attachTo: "main")
+    try inventory.saveSignedInAccount(a3, attachTo: "main")
+    check(inventory.readAccounts().count == 3 && inventory.readSharing().lenders["main"]?.count == 3,
+          "unlimited Claude backup accounts can be signed in and attached in Graft mode")
+
+    var refreshedA2 = a2
+    refreshedA2.sealed = "s2-new"
+    try inventory.saveSignedInAccount(refreshedA2, attachTo: "main")
+    check(inventory.readAccounts().count == 3
+          && inventory.readAccounts().first(where: { $0.id == a2.id })?.sealed == "s2-new"
+          && inventory.readSharing().lenders["main"]?.count == 3,
+          "re-signing an existing backup account updates its token without duplicating the lender")
+
+    try inventory.detach(a2.id, from: "main")
+    check(inventory.readSharing().lenders["main"] == [a1.id, a3.id] && inventory.unusedAccounts().map(\.id) == [a2.id],
+          "detaching a backup keeps its saved sign-in available for re-attachment")
+
+    try inventory.forgetUnused(a2.id)
+    check(inventory.readAccounts().map(\.id) == [a1.id, a3.id],
+          "forgetting an unused saved sign-in removes only that detached account")
+}
+
 print("\n\(checks - failures)/\(checks) checks passed")
 if failures > 0 {
     print("\(failures) FAILED")

@@ -65,6 +65,28 @@ final class AccountSignIn: ObservableObject {
         }
     }
 
+    func startExternal(for claude: String, excluding ownAccount: String?, interactive: Bool = true,
+                       onSuccess: @escaping @MainActor (PoolAccount) -> Void) {
+        if case .waiting = phase { return }
+        phase = .waiting(claude)
+        setCancelled(false)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.run(excluding: ownAccount, interactive: interactive)
+            DispatchQueue.main.async {
+                guard case .waiting(claude) = self.phase else { return }
+                switch result {
+                case .success(let account):
+                    onSuccess(account)
+                    self.phase = .idle
+                case .failure(.cancelled):
+                    self.phase = .idle
+                case .failure(let failure):
+                    self.phase = .failed(claude, message: failure.message)
+                }
+            }
+        }
+    }
+
     func cancel() {
         setCancelled(true)
         phase = .idle

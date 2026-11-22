@@ -4,14 +4,18 @@ import SwiftUI
 
 extension Notification.Name {
     static let switcherOpenBackupSignIn = Notification.Name("com.moonlitnayeem.claude-switcher.openBackupSignIn")
+    static let switcherAddGraftAccount = Notification.Name("com.moonlitnayeem.claude-switcher.addGraftAccount")
 }
 
 struct GraftConnectionView: View {
     private let connection = GraftConnection()
+    private var inventory: GraftAccountInventory { GraftAccountInventory(root: connection.root) }
     @ObservedObject private var labels = ClaudeAccountLabels.graft
+    @ObservedObject private var signIn = Shared.accountSignIn
     @State private var labelTarget: ClaudeLabelTarget?
     @State private var usageTarget: ClaudeUsageTarget?
     @State private var signInTarget: BackupSignInTarget?
+    @State private var forgetTarget: PoolAccount?
     @State private var usageReadings: [UUID: ClaudeUsageDisplay.Reading] = [:]
     @State private var snapshot = GraftConnection.Snapshot()
     @State private var loaded = false
@@ -48,6 +52,13 @@ struct GraftConnectionView: View {
                 }.fixedSize().identified("routing.profile")
             } else { Label(profileName(key), systemImage: "laptopcomputer").font(.callout) }
         } accountActions: {
+            if case .waiting(key) = signIn.phase {
+                Button("Cancel sign-in") { signIn.cancel() }
+                    .controlSize(.small)
+                    .identified("routing.graft-cancel-signin")
+            } else {
+                addAccountMenu(for: key, display: currentDisplay)
+            }
             Button("Manage in Graft") { openGraft() }.identified("routing.manage-graft")
         } manage: {
             Label("Connected through Graft", systemImage: "link")
@@ -71,6 +82,25 @@ struct GraftConnectionView: View {
             if let memberID = note.object as? String {
                 startBackupSignIn(memberID, profile: key)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .switcherAddGraftAccount)) { _ in
+            signInNewClaudeAccount(for: key)
+        }
+        .onChange(of: signIn.phase) { phase in
+            if case .failed(key, let reason) = phase {
+                message = reason
+                signIn.dismissFailure()
+            }
+        }
+        .alert("Forget this saved sign-in?", isPresented: Binding(
+            get: { forgetTarget != nil },
+            set: { if !$0 { forgetTarget = nil } }
+        ), presenting: forgetTarget) { account in
+            Button("Forget sign-in", role: .destructive) { forgetUnusedAccount(account.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { account in
+            Text(L10n.format("AI Switcher will forget %@. You can sign in again later.",
+                             account.email ?? account.id))
         }
         .sheet(item: $labelTarget) { target in
             ClaudeAccountLabelEditor(id: target.id, accountName: target.name, labels: labels)
@@ -377,6 +407,95 @@ struct GraftConnectionView: View {
         }
     }
 
+    @ViewBuilder
+    private func addAccountMenu(for key: String, display: RoutingDisplay) -> some View {
+        let attachable = inventory.availableToAttach(for: key, snapshot: snapshot)
+        let removable = Array(display.accounts.dropFirst())
+        let unused = inventory.unusedAccounts()
+        Menu {
+            ForEach(attachable) { item in
+                Button(item.label) { attachSavedAccount(item.id, to: key) }
+            }
+            if !attachable.isEmpty { Divider() }
+            Button("Sign In to Another Account…") {
+                signInNewClaudeAccount(for: key)
+            }
+            if !removable.isEmpty {
+                Divider()
+                Menu("Remove backup from profile") {
+                    ForEach(removable) { backup in
+                        Button(backup.nickname ?? backup.name) {
+                            detachBackupAccount(backup.id, from: key)
+                        }
+                    }
+                }
+            }
+            if !unused.isEmpty {
+                Divider()
+                Menu("Forget a saved sign-in…") {
+                    ForEach(unused, id: \.id) { account in
+                        Button(account.email ?? account.id) { forgetTarget = account }
+                    }
+                }
+            }
+        } label: {
+            Label("Add account", systemImage: "plus")
+        }
+        .menuStyle(.button)
+        .controlSize(.small)
+        .fixedSize()
+        .help(L10n.text("Sign in and attach as many backup Claude accounts as you want."))
+        .identified("routing.graft-add-account")
+    }
+
+    private func signInNewClaudeAccount(for key: String) {
+        let ownUUID = snapshot.accountUUIDs[key]?.uuidString
+        signIn.startExternal(for: key, excluding: ownUUID, interactive: true) { account in
+            Task {
+                do {
+                    _ = try inventory.saveSignedInAccount(account, attachTo: key)
+                    await GraftAccountInventory.reloadGraftControllerIfRunning()
+                    _ = await refreshStatus()
+                } catch {
+                    message = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func attachSavedAccount(_ memberID: String, to key: String) {
+        Task {
+            do {
+                try inventory.attachExisting(memberID, to: key)
+                await GraftAccountInventory.reloadGraftControllerIfRunning()
+                _ = await refreshStatus()
+            } catch {
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    private func detachBackupAccount(_ memberID: String, from key: String) {
+        Task {
+            do {
+                try inventory.detach(memberID, from: key)
+                await GraftAccountInventory.reloadGraftControllerIfRunning()
+                _ = await refreshStatus()
+            } catch {
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    private func forgetUnusedAccount(_ accountID: String) {
+        do {
+            try inventory.forgetUnused(accountID)
+            Task { _ = await refreshStatus() }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
     private func openGraft() {
         let workspace = NSWorkspace.shared
         guard let app = workspace.urlForApplication(withBundleIdentifier: "graft.claude-graft") else {
@@ -586,6 +705,10 @@ struct GraftConnectionView: View {
         }
 
         menu.addItem(.separator())
+        let addAccount = menu.addItem(withTitle: L10n.text("Add Another Claude Account…"),
+                                      action: #selector(addClaudeAccount), keyEquivalent: "")
+        addAccount.target = self
+
         let openMain = menu.addItem(withTitle: L10n.text("Open Claude Desktop"),
                                     action: #selector(openMainClaude), keyEquivalent: "")
         openMain.target = self
@@ -655,6 +778,13 @@ struct GraftConnectionView: View {
 
     @objc private func openMainClaude() {
         Task { _ = try? await ClaudeAppLauncher.openDesktop(allowSeparateWindow: false) }
+    }
+
+    @objc private func addClaudeAccount() {
+        openWindow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            NotificationCenter.default.post(name: .switcherAddGraftAccount, object: nil)
+        }
     }
 
     @objc private func openBackupChat(_ sender: NSMenuItem) {

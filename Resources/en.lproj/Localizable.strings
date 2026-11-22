@@ -878,3 +878,8 @@
 "Opened Antigravity CLI for %@." = "Opened Antigravity CLI for %@.";
 "Choose the project folder you want to work on." = "Choose the project folder you want to work on.";
 "Choose folder" = "Choose folder";
+"Cancel sign-in" = "Cancel sign-in";
+"Remove backup from profile" = "Remove backup from profile";
+"Add account" = "Add account";
+"Sign in and attach as many backup Claude accounts as you want." = "Sign in and attach as many backup Claude accounts as you want.";
+"Add Another Claude Account…" = "Add Another Claude Account…";

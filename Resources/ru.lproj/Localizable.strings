@@ -878,3 +878,8 @@
 "Opened Antigravity CLI for %@." = "Открыт Antigravity CLI для %@.";
 "Choose the project folder you want to work on." = "Выберите папку проекта для работы.";
 "Choose folder" = "Выбрать папку";
+"Cancel sign-in" = "Отменить вход";
+"Remove backup from profile" = "Убрать резервный из профиля";
+"Add account" = "Добавить аккаунт";
+"Sign in and attach as many backup Claude accounts as you want." = "Войдите и подключите сколько угодно резервных аккаунтов Claude.";
+"Add Another Claude Account…" = "Добавить ещё один аккаунт Claude…";
