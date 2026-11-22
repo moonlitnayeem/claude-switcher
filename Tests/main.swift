@@ -5940,6 +5940,16 @@ do {
     ], now: now, model: fable)
     check(fableLive?.fable == 0.09 && fableLive?.fableReset == now + 4 * day && fableLive?.fableObserved == now,
           "a Fable answer's 7d_oi utilization header is captured for live usage display")
+    let fableWarning = PoolLimits.parse([
+        (prefix + "5h-utilization", "0.36"), (prefix + "7d-utilization", "0.38"),
+        (prefix + "7d_oi-utilization", "0.75"), (prefix + "7d_oi-reset", stamp(3 * day)),
+        (prefix + "status", "allowed_warning"),
+        (prefix + "representative-claim", "seven_day_overage_included"),
+        (prefix + "overage-status", "rejected"),
+    ], now: now, model: fable)
+    check(fableWarning?.fable == 0.75 && fableWarning?.fableRefusedUntil == nil && fableWarning?.refusedUntil == nil
+          && PoolPolicy.hasRoom(fableWarning, now: now, model: fable),
+          "an allowed_warning Fable reply with overage-status rejected does not lock out the account")
     let scopedHeaders = [(prefix + "status", "rejected"), (prefix + "7d_oi-status", "rejected"),
                          (prefix + "7d_oi-reset", stamp(hour)), (prefix + "reset", stamp(day))]
     let fableHold = PoolLimits.parse(scopedHeaders, now: now, model: fable)

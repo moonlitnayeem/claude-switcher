@@ -163,7 +163,8 @@ struct PoolLimits: Codable, Equatable {
             guard lower.hasPrefix(prefix), lower.hasSuffix("-status"),
                   pair.1.lowercased() == "rejected" else { return nil }
             let bucket = String(lower.dropFirst(prefix.count).dropLast("-status".count))
-            guard !bucket.isEmpty, bucket != "5h", bucket != "7d" else { return nil }
+            guard !bucket.isEmpty, bucket != "5h", bucket != "7d",
+                  bucket != "overage", bucket != "extra_usage" else { return nil }
             return bucket
         }
         let generalClaim = claim == "five_hour" || claim == "seven_day" || claim == "overage" || claim == "extra_usage"
@@ -176,8 +177,10 @@ struct PoolLimits: Codable, Equatable {
         let modelOnly = !fableOnly && !overallRejected && model != nil
             && (scopedClaim || !rejectedScopedBuckets.isEmpty
                 || (rateLimited && claim == nil && weekExplicitlyAllowed && (five ?? 0) < 1 && (week ?? 0) < 1))
-        let rejected = rateLimited || status == "rejected" || fiveRejected || weekRejected
-            || (fableOnly && fableRejected) || (!overallRejected && !rejectedScopedBuckets.isEmpty)
+        // An allowed or warning answer (e.g. 75% Fable with overage disabled) is not a refusal.
+        let explicitlyAllowed = !rateLimited && (status == "allowed" || status == "allowed_warning")
+        let rejected = !explicitlyAllowed && (rateLimited || status == "rejected" || fiveRejected || weekRejected
+            || (fableOnly && fableRejected) || (!overallRejected && !rejectedScopedBuckets.isEmpty))
         guard five != nil || week != nil || fableUtil != nil || status != nil || rejected else { return nil }
         var limits = PoolLimits(fiveHour: five ?? 0,
                                 fiveHourReset: date(prefix + "5h-reset"),

@@ -128,7 +128,8 @@ class Service(http.server.BaseHTTPRequestHandler):
             return
         self.send_response(200)
         for k, v in limits.items(): self.send_header(k, v)
-        self.send_header("anthropic-ratelimit-unified-status", "allowed")
+        for k, v in (state.get("extra_headers") or {}).items(): self.send_header(k, v)
+        self.send_header("anthropic-ratelimit-unified-status", state.get("ok_status", "allowed"))
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
@@ -881,6 +882,30 @@ check(response.status == 429 and [w["token"] for w in went] == [exhausted_m, exh
 response, _, went = ask(conn, exhausted_m, session=None, body=fable_body)
 check(response.status == 429 and [w["token"] for w in went] == [exhausted_m],
       "a freshly re-confirmed full backup is not spammed on the very next turn")
+
+# A 200 OK warning at 75% Fable with overage-status: rejected must keep routing to the backup.
+warn_m, warn_b = "tok-warn-main", "tok-warn-backup"
+accounts[warn_m] = {"5h": 0.0, "7d": 0.87, "7d-reset": now + 5 * 86400, "reject": False,
+                    "model_rejections": {fable_model: {"7d-status": "allowed", "7d_oi-status": "rejected"}}}
+accounts[warn_b] = {"5h": 0.36, "7d": 0.38, "7d_oi": 0.75, "7d-reset": now + 3 * 86400, "reject": False,
+                    "ok_status": "allowed_warning",
+                    "extra_headers": {
+                        "anthropic-ratelimit-unified-representative-claim": "seven_day_overage_included",
+                        "anthropic-ratelimit-unified-overage-status": "rejected",
+                    }}
+control({"configure": {"enabled": True, "members": [
+    dict(member("warn-main", warn_m, borrows=["warn-backup"]), limits=pushed(now + 5 * 86400)),
+    dict(member("warn-backup", warn_b), limits=pushed(now + 3 * 86400)),
+]}}, production_order=True)
+response, _, went = ask(conn, warn_m, session="warn-sess", body=fable_body)
+check(response.status == 200 and [w["token"] for w in went] == [warn_m, warn_b],
+      "a 75% Fable warning reply with overage-status rejected succeeds on the backup")
+response, _, went = ask(conn, warn_m, session="warn-sess", body=fable_body)
+check(response.status == 200 and [w["token"] for w in went] == [warn_b],
+      "the next Fable turn stays on the backup instead of falsely locking it out")
+warn_state = next(row for row in control({})["members"] if row["id"] == "warn-backup")
+check(warn_state["limits"].get("fable") == 0.75 and warn_state["limits"].get("fableRefusedUntil") is None,
+      "an allowed_warning reply records 75% Fable without setting fableRefusedUntil")
 
 thread_pool("G", "H", 95)
 response, payload, went = ask_thread("tok-H", "s40", threaded("create"))

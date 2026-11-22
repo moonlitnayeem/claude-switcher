@@ -499,6 +499,9 @@ actor PoolState {
                     parsed.fableObserved = previous.fableObserved
                 }
             }
+            if succeeded {
+                parsed.clearRefusals(for: model)
+            }
             preserveCooldowns(in: &parsed, from: previous, now: now,
                               clearingModel: succeeded ? model : nil,
                               clearAccountWide: succeeded)
